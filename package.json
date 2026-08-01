@@ -2,6 +2,9 @@
   "name": "metas-comissoes-vendas",
   "private": true,
   "version": "0.1.0",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite",
     "server": "tsx watch src/server/index.ts",
@@ -12,9 +15,11 @@
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist/server/index.js",
+    "postinstall": "prisma generate",
     "lint": "eslint . --ext .ts,.tsx",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "prisma:seed": "prisma db seed"
   },
