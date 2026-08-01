@@ -1,5 +1,11 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // "native" cobre o dev local (Windows); "debian-openssl-3.0.x" é o
+  // binary target real da imagem node:20-slim (Debian 12/bookworm) usada
+  // no Dockerfile de produção — sem isso o Prisma detecta openssl-1.1.x
+  // por padrão e falha em runtime com "libssl.so.1.1: cannot open shared
+  // object file" (Debian 12 só tem OpenSSL 3.x).
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
