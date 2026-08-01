@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { platformLogin } from "../services/platform-auth.service";
+import { createPlatformUser, listPlatformUsers, platformLogin } from "../services/platform-auth.service";
 import {
   approveCompanySignupRequest,
   listCompanySignupRequests,
@@ -99,6 +99,33 @@ export async function listCompaniesWithUsersHandler(_req: Request, res: Response
   try {
     const companies = await listCompaniesWithUsers();
     res.json(companies);
+  } catch (error) {
+    respondToError(error, res);
+  }
+}
+
+const createPlatformUserSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+  role: z.enum(["SUPER_ADMIN", "SUPORTE"]),
+});
+
+export async function listPlatformUsersHandler(_req: Request, res: Response) {
+  try {
+    const users = await listPlatformUsers();
+    res.json(users);
+  } catch (error) {
+    respondToError(error, res);
+  }
+}
+
+export async function createPlatformUserHandler(req: Request, res: Response) {
+  const parsed = createPlatformUserSchema.safeParse(req.body);
+  if (!parsed.success) return badRequest(res);
+
+  try {
+    const user = await createPlatformUser(req.platformUser!, parsed.data);
+    res.status(201).json(user);
   } catch (error) {
     respondToError(error, res);
   }

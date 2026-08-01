@@ -1,8 +1,9 @@
 import jwt from "jsonwebtoken";
 import { prisma } from "../config/prisma";
-import { supabaseAuth } from "../config/supabase";
+import { supabaseAdmin, supabaseAuth } from "../config/supabase";
 import { env } from "../config/env";
-import { UnauthorizedError } from "../utils/http-errors";
+import { ConflictError, ForbiddenError, UnauthorizedError } from "../utils/http-errors";
+import { sendMail } from "./mailer.service";
 
 // Identidade separada de User/Company — o Super Admin/Suporte da
 // plataforma não pertence a nenhum tenant. Payload distinto de
@@ -54,4 +55,69 @@ export async function platformLogin({ email, password }: PlatformLoginInput): Pr
       role: platformUser.role,
     },
   };
+}
+
+interface CreatePlatformUserInput {
+  name: string;
+  email: string;
+  role: "SUPER_ADMIN" | "SUPORTE";
+}
+
+// Só um SUPER_ADMIN cria novos PlatformUser — SUPORTE nunca escala o
+// próprio acesso nem cria outros. A identidade nasce no Supabase Auth via
+// generateLink (mesmo padrão de sendInviteEmail em permissoes.service.ts):
+// o novo Super Admin define a própria senha pelo link, nunca recebe senha
+// em texto claro.
+export async function createPlatformUser(
+  requestingUser: { role: "SUPER_ADMIN" | "SUPORTE" },
+  input: CreatePlatformUserInput,
+): Promise<{ id: string; name: string; email: string; role: "SUPER_ADMIN" | "SUPORTE" }> {
+  if (requestingUser.role !== "SUPER_ADMIN") {
+    throw new ForbiddenError("Só o Super Admin pode adicionar novos usuários da plataforma.");
+  }
+
+  const existing = await prisma.platformUser.findUnique({ where: { email: input.email } });
+  if (existing) {
+    throw new ConflictError("Já existe um usuário da plataforma com este e-mail.");
+  }
+
+  const redirectTo = `${env.frontendUrl}/redefinir-senha`;
+  const { data, error } = await supabaseAdmin.auth.admin.generateLink({
+    type: "invite",
+    email: input.email,
+    options: { redirectTo },
+  });
+  if (error || !data) {
+    throw new Error(`Falha ao gerar link de convite: ${error?.message}`);
+  }
+
+  const platformUser = await prisma.platformUser.create({
+    data: {
+      name: input.name,
+      email: input.email,
+      passwordHash: "",
+      authUserId: data.user.id,
+      role: input.role,
+    },
+  });
+
+  await sendMail({
+    to: input.email,
+    subject: "Convite para acessar o Painel da Plataforma",
+    html: `
+      <p>Você foi convidado a acessar o Painel da Plataforma (Metas e Comissões) como <strong>${input.role === "SUPER_ADMIN" ? "Super Admin" : "Suporte"}</strong>.</p>
+      <p><a href="${data.properties.action_link}">Clique aqui para definir sua senha e entrar</a></p>
+    `,
+  }).catch(() => undefined);
+
+  return { id: platformUser.id, name: platformUser.name, email: platformUser.email, role: platformUser.role };
+}
+
+export async function listPlatformUsers(): Promise<
+  { id: string; name: string; email: string; role: "SUPER_ADMIN" | "SUPORTE" }[]
+> {
+  return prisma.platformUser.findMany({
+    select: { id: true, name: true, email: true, role: true },
+    orderBy: { name: "asc" },
+  });
 }

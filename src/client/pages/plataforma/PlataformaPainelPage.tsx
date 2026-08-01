@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { platformApi, getPlatformErrorMessage } from "@/services/platform-api";
 import { usePlatformAuthStore } from "@/store/platform-auth.store";
@@ -29,30 +29,66 @@ interface CompanyWithUsers {
   users: CompanyUser[];
 }
 
+interface PlatformUserRow {
+  id: string;
+  name: string;
+  email: string;
+  role: "SUPER_ADMIN" | "SUPORTE";
+}
+
 export function PlataformaPainelPage() {
   const navigate = useNavigate();
   const platformUser = usePlatformAuthStore((state) => state.platformUser);
   const clearSession = usePlatformAuthStore((state) => state.clearSession);
   const [requests, setRequests] = useState<CompanySignupRequest[]>([]);
   const [companies, setCompanies] = useState<CompanyWithUsers[]>([]);
+  const [platformUsers, setPlatformUsers] = useState<PlatformUserRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserRole, setNewUserRole] = useState<"SUPER_ADMIN" | "SUPORTE">("SUPER_ADMIN");
+  const [isCreatingUser, setIsCreatingUser] = useState(false);
+  const [createUserError, setCreateUserError] = useState<string | null>(null);
+  const [createUserSuccess, setCreateUserSuccess] = useState<string | null>(null);
 
   async function loadAll() {
     setIsLoading(true);
     setError(null);
     try {
-      const [requestsRes, companiesRes] = await Promise.all([
+      const [requestsRes, companiesRes, platformUsersRes] = await Promise.all([
         platformApi.get<CompanySignupRequest[]>("/plataforma/pedidos-empresa", { params: { status: "PENDENTE" } }),
         platformApi.get<CompanyWithUsers[]>("/plataforma/empresas"),
+        platformApi.get<PlatformUserRow[]>("/plataforma/usuarios"),
       ]);
       setRequests(requestsRes.data);
       setCompanies(companiesRes.data);
+      setPlatformUsers(platformUsersRes.data);
     } catch (err) {
       setError(getPlatformErrorMessage(err, "Não foi possível carregar os dados."));
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function handleCreatePlatformUser(event: FormEvent) {
+    event.preventDefault();
+    setIsCreatingUser(true);
+    setCreateUserError(null);
+    setCreateUserSuccess(null);
+    try {
+      await platformApi.post("/plataforma/usuarios", { name: newUserName, email: newUserEmail, role: newUserRole });
+      setCreateUserSuccess(`Convite enviado para ${newUserEmail}.`);
+      setNewUserName("");
+      setNewUserEmail("");
+      setNewUserRole("SUPER_ADMIN");
+      await loadAll();
+    } catch (err) {
+      setCreateUserError(getPlatformErrorMessage(err, "Não foi possível criar o usuário."));
+    } finally {
+      setIsCreatingUser(false);
     }
   }
 
@@ -153,6 +189,59 @@ export function PlataformaPainelPage() {
               </div>
             ))}
           </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold text-foreground">Usuários da plataforma</h2>
+
+          <div className="space-y-2">
+            {platformUsers.map((u) => (
+              <div key={u.id} className="flex items-center justify-between rounded-md border border-border bg-card px-3 py-2 text-sm">
+                <span className="text-foreground">
+                  {u.name} — {u.email}
+                </span>
+                <span className="text-xs text-muted-foreground">{u.role === "SUPER_ADMIN" ? "Super Admin" : "Suporte"}</span>
+              </div>
+            ))}
+          </div>
+
+          <form onSubmit={handleCreatePlatformUser} className="space-y-2 rounded-lg border border-border bg-card p-4">
+            <p className="text-sm font-medium text-foreground">Adicionar novo usuário da plataforma</p>
+            {createUserError && <p className="text-sm text-destructive">{createUserError}</p>}
+            {createUserSuccess && <p className="text-sm text-success">{createUserSuccess}</p>}
+            <div className="flex flex-wrap gap-2">
+              <input
+                required
+                placeholder="Nome"
+                value={newUserName}
+                onChange={(e) => setNewUserName(e.target.value)}
+                className="w-48 rounded-md border border-input bg-background px-2 py-1.5 text-sm text-foreground"
+              />
+              <input
+                required
+                type="email"
+                placeholder="E-mail"
+                value={newUserEmail}
+                onChange={(e) => setNewUserEmail(e.target.value)}
+                className="w-64 rounded-md border border-input bg-background px-2 py-1.5 text-sm text-foreground"
+              />
+              <select
+                value={newUserRole}
+                onChange={(e) => setNewUserRole(e.target.value as "SUPER_ADMIN" | "SUPORTE")}
+                className="rounded-md border border-input bg-background px-2 py-1.5 text-sm text-foreground"
+              >
+                <option value="SUPER_ADMIN">Super Admin</option>
+                <option value="SUPORTE">Suporte</option>
+              </select>
+              <button
+                type="submit"
+                disabled={isCreatingUser}
+                className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
+              >
+                {isCreatingUser ? "Enviando..." : "Convidar"}
+              </button>
+            </div>
+          </form>
         </section>
 
         <section className="space-y-3">

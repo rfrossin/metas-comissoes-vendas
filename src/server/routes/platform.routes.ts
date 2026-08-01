@@ -1,8 +1,10 @@
 import { Router } from "express";
 import {
   approveCompanySignupRequestHandler,
+  createPlatformUserHandler,
   listCompaniesWithUsersHandler,
   listCompanySignupRequestsHandler,
+  listPlatformUsersHandler,
   platformLoginHandler,
   rejectCompanySignupRequestHandler,
 } from "../controllers/platform.controller";
@@ -21,3 +23,5 @@ platformRoutes.get("/pedidos-empresa", asyncHandler(listCompanySignupRequestsHan
 platformRoutes.get("/empresas", asyncHandler(listCompaniesWithUsersHandler));
 platformRoutes.post("/pedidos-empresa/:id/aprovar", asyncHandler(approveCompanySignupRequestHandler));
 platformRoutes.post("/pedidos-empresa/:id/rejeitar", asyncHandler(rejectCompanySignupRequestHandler));
+platformRoutes.get("/usuarios", asyncHandler(listPlatformUsersHandler));
+platformRoutes.post("/usuarios", asyncHandler(createPlatformUserHandler));

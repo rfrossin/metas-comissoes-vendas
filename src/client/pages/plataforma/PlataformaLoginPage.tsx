@@ -79,6 +79,14 @@ export function PlataformaLoginPage() {
         >
           {isSubmitting ? "Entrando..." : "Entrar"}
         </button>
+
+        <button
+          type="button"
+          onClick={() => navigate("/esqueci-senha")}
+          className="w-full text-sm text-muted-foreground hover:text-foreground"
+        >
+          Esqueci minha senha
+        </button>
       </form>
     </div>
   );
