@@ -16,16 +16,19 @@ RUN npm run build:server
 FROM node:20-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-# Força o binary target correto — a auto-detecção do Prisma 5.22 nesta
-# imagem (Debian 12/bookworm, só OpenSSL 3.x) tenta carregar o engine
-# debian-openssl-1.1.x por padrão mesmo com os dois binaries presentes em
-# node_modules/.prisma/client, então a variável abaixo é obrigatória, não
-# apenas o binaryTargets no schema.
-ENV PRISMA_QUERY_ENGINE_LIBRARY=/app/node_modules/.prisma/client/libquery_engine-debian-openssl-3.0.x.so.node
 
 COPY package*.json ./
 COPY prisma ./prisma
 RUN npm ci --omit=dev
+
+# Força o binary target correto DEPOIS do npm ci (que já rodou "prisma
+# generate" via postinstall e criou os .so.node em node_modules/.prisma) —
+# a auto-detecção do Prisma 5.22 nesta imagem (Debian 12/bookworm, só
+# OpenSSL 3.x) tenta carregar o engine debian-openssl-1.1.x por padrão
+# mesmo com o binary 3.0.x presente, então a variável é obrigatória.
+# Definir isso ANTES do npm ci quebra o próprio "prisma generate", que
+# tenta resolver esse caminho antes dele existir.
+ENV PRISMA_QUERY_ENGINE_LIBRARY=/app/node_modules/.prisma/client/libquery_engine-debian-openssl-3.0.x.so.node
 
 COPY --from=build /app/dist ./dist
 
