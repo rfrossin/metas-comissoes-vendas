@@ -1,0 +1,3 @@
+api.rossinvendas.com {
+    reverse_proxy localhost:3333
+}
