@@ -17,6 +17,11 @@ FROM node:20-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
+# node:20-slim não traz OpenSSL como pacote de sistema — o binary do
+# Prisma (mesmo o 3.0.x, correto para Debian 12) precisa do libssl.so.3
+# real instalado, não só o que o Node usa internamente.
+RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+
 COPY package*.json ./
 COPY prisma ./prisma
 RUN npm ci --omit=dev
