@@ -1,0 +1,1155 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================================
+// PLATAFORMA — únicas tabelas sem company_id (por definição)
+// ============================================================
+
+model Company {
+  id        String        @id @default(cuid())
+  name      String
+  status    CompanyStatus @default(ATIVA)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  users                          User[]
+  invites                        Invite[]
+  channels                       Channel[]
+  departments                    Department[]
+  teams                          Team[]
+  members                        Member[]
+  nodeResponsibles               NodeResponsible[]
+  cargos                         Cargo[]
+  resultTypes                    ResultType[]
+  resultEntries                  ResultEntry[]
+  operationalAdjustments         OperationalAdjustment[]
+  importMappings                 ImportMapping[]
+  commercialPeriods              CommercialPeriod[]
+  seasonalityBases               SeasonalityBase[]
+  seasonalityWeights             SeasonalityWeight[]
+  goalCampaigns                  GoalCampaign[]
+  goalTriggers                   GoalTrigger[]
+  goalLines                      GoalLine[]
+  goalDailyValues                GoalDailyValue[]
+  goalLineGroupSources           GoalLineGroupSource[]
+  receivablesBases               ReceivablesBase[]
+  receivablesBeneficiaries       ReceivablesBeneficiary[]
+  receivablesConditionalTriggers ReceivablesConditionalTrigger[]
+  receivablesTierRules           ReceivablesTierRule[]
+  receivablesValueTiers          ReceivablesValueTier[]
+  financialSnapshots             FinancialPeriodSnapshot[]
+  closureAuditLogs               ClosureAuditLog[]
+  memberClosings                 MemberClosing[]
+  userScopeAssignments           UserScopeAssignment[]
+  notifications                  Notification[]
+
+  @@map("companies")
+}
+
+enum CompanyStatus {
+  ATIVA
+  BLOQUEADA_INADIMPLENCIA
+}
+
+model PlatformUser {
+  id           String       @id @default(cuid())
+  name         String
+  email        String       @unique
+  // Mantido durante a transição (mesma razão do User.passwordHash: caminho
+  // de rollback); a fonte de verdade de autenticação é o Supabase Auth via
+  // authUserId, não este hash.
+  passwordHash String
+  // uuid da identidade em auth.users — nulo até o Super Admin logar pela
+  // primeira vez (script de provisionamento cria a linha antes da
+  // identidade Supabase existir).
+  authUserId   String?      @unique
+  role         PlatformRole
+  createdAt    DateTime     @default(now())
+
+  reviewedRequests CompanySignupRequest[]
+
+  @@map("platform_users")
+}
+
+enum PlatformRole {
+  SUPER_ADMIN
+  SUPORTE
+}
+
+// Pedido de liberação de nova empresa, submetido pelo botão "Nova Empresa"
+// na tela de login. Não cria Company nem User — só existe até um
+// PlatformUser (Super Admin) aprovar ou rejeitar. Fora do particionamento
+// por companyId por definição (é anterior a qualquer Company existir).
+model CompanySignupRequest {
+  id              String              @id @default(cuid())
+  companyName     String
+  contactName     String
+  contactEmail    String
+  status          SignupRequestStatus @default(PENDENTE)
+  reviewedByUserId String?
+  reviewedAt      DateTime?
+  rejectionReason String?
+  createdCompanyId String?
+  createdAt       DateTime            @default(now())
+
+  reviewedBy PlatformUser? @relation(fields: [reviewedByUserId], references: [id])
+
+  @@index([status])
+  @@map("company_signup_requests")
+}
+
+enum SignupRequestStatus {
+  PENDENTE
+  APROVADO
+  REJEITADO
+}
+
+// ============================================================
+// AUTENTICAÇÃO E RBAC
+// ============================================================
+
+model User {
+  id           String          @id @default(cuid())
+  companyId    String
+  email        String
+  // Mantido durante a transição para Supabase Auth (rollback); sai quando a
+  // Fase 3 estiver validada em produção. Enquanto authUserId for null, o
+  // login antigo (JWT próprio) continua sendo a fonte de verdade deste
+  // usuário.
+  passwordHash String
+  // Liga esta linha à identidade em auth.users (Supabase). Uma identidade
+  // (um e-mail, globalmente único) pode ter N linhas de User — uma por
+  // empresa em que participa (membership) — por isso NÃO é @unique sozinho;
+  // a unicidade é (authUserId, companyId): a mesma identidade não pode ter
+  // duas linhas na mesma empresa, mas pode ter uma por empresa diferente.
+  // Null enquanto o usuário não foi migrado (ver
+  // prisma/backfill-supabase-auth.ts).
+  authUserId   String?
+  role         PermissionLevel
+  memberId     String?         @unique
+  // Libera lançar/editar Resultados especificamente do Membro vinculado
+  // (memberId), além da visualização automática que o vínculo já concede.
+  // Sem efeito se memberId for null. Não afeta Metas/Recebíveis do Membro.
+  canLaunchOwnMemberResults Boolean @default(false)
+  isActive     Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  member  Member? @relation(fields: [memberId], references: [id])
+
+  invitesSent                   Invite[]
+  operationalAdjustmentsCreated OperationalAdjustment[]
+  periodsClosed                 CommercialPeriod[]      @relation("PeriodClosedBy")
+  periodsReopened               CommercialPeriod[]      @relation("PeriodReopenedBy")
+  closureAuditLogs              ClosureAuditLog[]
+  memberClosingsClosed          MemberClosing[]
+  goalCampaignsCreated          GoalCampaign[]
+  receivablesBasesCreated       ReceivablesBase[]
+  scopeAssignments              UserScopeAssignment[]
+
+  @@unique([companyId, email])
+  @@unique([authUserId, companyId])
+  @@index([companyId])
+  @@map("users")
+}
+
+enum PermissionLevel {
+  OPERACIONAL
+  LIDERANCA_NO
+  ADMINISTRADOR
+}
+
+// Atribuições de escopo do papel Usuário (OPERACIONAL): cada linha é uma
+// hierarquia (CANAL/DEPARTAMENTO/TIME, scopeId = id do nó) ou um Membro
+// específico (scopeType MEMBRO), com um nível próprio — VISUALIZAR ou
+// EDITAR — que vale para todos os módulos aplicáveis daquela seleção (não é
+// por módulo). scopeType EMPRESA + scopeId null = acesso à empresa inteira.
+//
+// Para o papel Gestor (LIDERANCA_NO), as linhas desta tabela SÃO o
+// mecanismo de "hierarquias lideradas" (substitui o uso de NodeResponsible
+// como motor de permissão — NodeResponsible continua existindo só para o
+// conceito de "Responsável visual do nó", sem relação com controle de
+// acesso). Por regra de negócio, toda linha de um Gestor é gravada com
+// accessLevel = EDITAR (a UI nem oferece VISUALIZAR para esse papel; o
+// backend força isso na gravação como defesa em profundidade).
+//
+// ADMINISTRADOR nunca tem linhas aqui — é irrestrito via User.role.
+model UserScopeAssignment {
+  id          String       @id @default(cuid())
+  companyId   String
+  userId      String
+  scopeType   OrgScopeType
+  scopeId     String?
+  accessLevel AccessLevel
+
+  company Company @relation(fields: [companyId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([userId, scopeType, scopeId])
+  @@index([companyId])
+  @@index([userId])
+  @@map("user_scope_assignments")
+}
+
+enum AccessLevel {
+  VISUALIZAR
+  EDITAR
+}
+
+// Convite hoje só pede Nome + e-mail (cargoId/teamId/memberId ficam null) —
+// o vínculo a um Cargo/Time/Membro passou a ser sempre uma ação posterior
+// do Admin, feita depois que o convite já foi aceito (ver User.memberId).
+model Invite {
+  id              String       @id @default(cuid())
+  companyId       String
+  name            String
+  email           String
+  cargoId         String?
+  teamId          String?
+  memberId        String?      @unique
+  status          InviteStatus @default(PENDENTE)
+  token           String       @unique
+  // Opcional (String?, onDelete: SetNull) — o Login de quem convidou pode
+  // ser excluído (Usuário é só um acesso, ver deleteUser em
+  // permissoes.service.ts); o convite em si permanece, só perde a
+  // atribuição de quem convidou.
+  invitedByUserId String?
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  createdAt       DateTime     @default(now())
+
+  company   Company @relation(fields: [companyId], references: [id])
+  cargo     Cargo?  @relation(fields: [cargoId], references: [id])
+  team      Team?   @relation(fields: [teamId], references: [id])
+  member    Member? @relation(fields: [memberId], references: [id])
+  invitedBy User?   @relation(fields: [invitedByUserId], references: [id])
+
+  @@index([companyId])
+  @@map("invites")
+}
+
+enum InviteStatus {
+  PENDENTE
+  ACEITO
+  EXPIRADO
+  CANCELADO
+}
+
+// ============================================================
+// 1. ESTRUTURA ORGANIZACIONAL
+// ============================================================
+
+model Channel {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company      Company           @relation(fields: [companyId], references: [id])
+  departments  Department[]
+  responsibles NodeResponsible[]
+
+  @@index([companyId])
+  @@map("channels")
+}
+
+model Department {
+  id        String   @id @default(cuid())
+  companyId String
+  channelId String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company      Company           @relation(fields: [companyId], references: [id])
+  channel      Channel           @relation(fields: [channelId], references: [id])
+  teams        Team[]
+  responsibles NodeResponsible[]
+
+  @@index([companyId])
+  @@index([channelId])
+  @@map("departments")
+}
+
+model Team {
+  id           String   @id @default(cuid())
+  companyId    String
+  departmentId String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company      Company           @relation(fields: [companyId], references: [id])
+  department   Department        @relation(fields: [departmentId], references: [id])
+  members      Member[]
+  responsibles NodeResponsible[]
+  invites      Invite[]
+
+  @@index([companyId])
+  @@index([departmentId])
+  @@map("teams")
+}
+
+// "Regra de Ouro" (Estrutura Organizacional §4): teamId não pode ser alterado
+// via UPDATE direto quando o membro já possui histórico — regra aplicada na
+// camada de serviço (transferência = inativar + criar novo Member), não no schema.
+// teamId é opcional: um Membro que existe apenas como Responsável de um nó
+// superior (Departamento, Canal ou Empresa) não está necessariamente alocado
+// operacionalmente em nenhum Time.
+model Member {
+  id                String       @id @default(cuid())
+  companyId         String
+  teamId            String?
+  cargoId           String
+  fullName          String
+  status            MemberStatus @default(ATIVO)
+  // Elegibilidade para liderar hierarquias (NodeResponsible) é só GESTOR —
+  // independe de ter Time (teamId): um Gestor pode pertencer a um Time
+  // normal e ainda assim liderar outras hierarquias ao mesmo tempo.
+  memberType        MemberType   @default(OPERADOR)
+  customFixedSalary Decimal?     @db.Decimal(14, 2)
+  inactivatedAt     DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  team    Team?   @relation(fields: [teamId], references: [id])
+  cargo   Cargo   @relation(fields: [cargoId], references: [id])
+  user    User?
+
+  nodeResponsibleFor     NodeResponsible[]
+  resultEntries          ResultEntry[]
+  operationalAdjustments OperationalAdjustment[]
+  goalDailyValues        GoalDailyValue[]
+  receivablesBeneficiary ReceivablesBeneficiary[]
+  financialSnapshots     FinancialPeriodSnapshot[]
+  memberClosings         MemberClosing[]
+  closureAuditLogs       ClosureAuditLog[]
+  invite                 Invite?
+
+  @@index([companyId])
+  @@index([teamId])
+  @@map("members")
+}
+
+enum MemberStatus {
+  ATIVO
+  INATIVO
+}
+
+enum MemberType {
+  OPERADOR
+  GESTOR
+}
+
+model NodeResponsible {
+  id           String      @id @default(cuid())
+  companyId    String
+  nodeType     OrgNodeType
+  channelId    String?
+  departmentId String?
+  teamId       String?
+  memberId     String
+  createdAt    DateTime    @default(now())
+
+  company    Company     @relation(fields: [companyId], references: [id])
+  channel    Channel?    @relation(fields: [channelId], references: [id])
+  department Department? @relation(fields: [departmentId], references: [id])
+  team       Team?       @relation(fields: [teamId], references: [id])
+  member     Member      @relation(fields: [memberId], references: [id])
+
+  @@index([companyId])
+  @@map("node_responsibles")
+}
+
+enum OrgNodeType {
+  EMPRESA
+  CANAL
+  DEPARTAMENTO
+  TIME
+}
+
+// ============================================================
+// 6. CARGOS
+// ============================================================
+
+model Cargo {
+  id                 String          @id @default(cuid())
+  companyId          String
+  name               String
+  defaultFixedSalary Decimal         @db.Decimal(14, 2)
+  permissionLevel    PermissionLevel
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  company        Company         @relation(fields: [companyId], references: [id])
+  members        Member[]
+  invites        Invite[]
+  memberClosings MemberClosing[]
+
+  @@index([companyId])
+  @@map("cargos")
+}
+
+// ============================================================
+// 2. RESULTADOS
+// ============================================================
+
+model ResultType {
+  id        String     @id @default(cuid())
+  companyId String
+  name      String
+  unit      ResultUnit
+  createdAt DateTime   @default(now())
+
+  company                Company                 @relation(fields: [companyId], references: [id])
+  resultEntries          ResultEntry[]
+  operationalAdjustments OperationalAdjustment[]
+  importMappings         ImportMapping[]
+  seasonalityBases       SeasonalityBase[]
+  goalCampaigns          GoalCampaign[]
+  rewardForTierRules     ReceivablesTierRule[]   @relation("RewardResultType")
+  receivablesBases       ReceivablesBase[]       @relation("ReceivablesBaseResultType")
+  conditionalForReceivablesTriggers ReceivablesConditionalTrigger[] @relation("ConditionalResultType")
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@map("result_types")
+}
+
+enum ResultUnit {
+  MOEDA
+  NUMERAL
+}
+
+model ResultEntry {
+  id        String   @id @default(cuid())
+  companyId String
+  memberId  String
+  typeId    String
+  date      DateTime @db.Date
+  value     Decimal  @db.Decimal(18, 2)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company    @relation(fields: [companyId], references: [id])
+  member  Member     @relation(fields: [memberId], references: [id])
+  type    ResultType @relation(fields: [typeId], references: [id])
+
+  @@index([companyId])
+  @@index([memberId, date])
+  @@index([typeId])
+  @@map("result_entries")
+}
+
+// value aceita negativos (estornos); reason é obrigatório (Resultados §4)
+model OperationalAdjustment {
+  id              String   @id @default(cuid())
+  companyId       String
+  memberId        String
+  typeId          String
+  value           Decimal  @db.Decimal(18, 2)
+  dateReference   DateTime @db.Date
+  reason          String?
+  // Opcional (String?, onDelete: SetNull) — o Login de quem criou pode ser
+  // excluído (Usuário é só um acesso, ver deleteUser em
+  // permissoes.service.ts); o Ajuste em si (dado do Membro, entra no
+  // Realizado) permanece intacto, só perde a atribuição de quem criou.
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  company   Company    @relation(fields: [companyId], references: [id])
+  member    Member     @relation(fields: [memberId], references: [id])
+  type      ResultType @relation(fields: [typeId], references: [id])
+  createdBy User?      @relation(fields: [createdByUserId], references: [id])
+
+  @@index([companyId])
+  @@index([memberId, dateReference])
+  @@map("operational_adjustments")
+}
+
+// Regras de "De-Para" salvas (Resultados §3): próximas importações com o
+// mesmo rótulo são convertidas automaticamente para o typeId mapeado.
+model ImportMapping {
+  id          String   @id @default(cuid())
+  companyId   String
+  sourceLabel String
+  typeId      String
+  createdAt   DateTime @default(now())
+
+  company Company    @relation(fields: [companyId], references: [id])
+  type    ResultType @relation(fields: [typeId], references: [id])
+
+  @@unique([companyId, sourceLabel])
+  @@index([companyId])
+  @@map("import_mappings")
+}
+
+model CommercialPeriod {
+  id               String       @id @default(cuid())
+  companyId        String
+  referenceMonth   DateTime     @db.Date
+  status           PeriodStatus @default(ABERTO)
+  closedAt         DateTime?
+  closedByUserId   String?
+  reopenedAt       DateTime?
+  reopenedByUserId String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  company    Company @relation(fields: [companyId], references: [id])
+  closedBy   User?   @relation("PeriodClosedBy", fields: [closedByUserId], references: [id])
+  reopenedBy User?   @relation("PeriodReopenedBy", fields: [reopenedByUserId], references: [id])
+
+  @@unique([companyId, referenceMonth])
+  @@index([companyId])
+  @@map("commercial_periods")
+}
+
+enum PeriodStatus {
+  ABERTO
+  FECHADO
+}
+
+// ============================================================
+// 3. BASES PARA METAS (Sazonalidade)
+// ============================================================
+
+model SeasonalityBase {
+  id           String                  @id @default(cuid())
+  companyId    String
+  name         String
+  resultTypeId String
+  analysisType SeasonalityAnalysisType
+  scopeType    OrgScopeType
+  scopeId      String?
+  startDate    DateTime?               @db.Date
+  endDate      DateTime?               @db.Date
+  isManual     Boolean                 @default(false)
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+
+  company        Company             @relation(fields: [companyId], references: [id])
+  resultType     ResultType          @relation(fields: [resultTypeId], references: [id])
+  weights        SeasonalityWeight[]
+  goalLines      GoalLine[]          @relation("MonthlySeasonality")
+  dailyGoalLines GoalLine[]          @relation("DailySeasonality")
+
+  @@index([companyId])
+  @@map("seasonality_bases")
+}
+
+enum SeasonalityAnalysisType {
+  DIAS_SEMANA
+  DIAS_ANO
+  DIAS_MES
+  MESES_ANO
+  MESES_DIAS_SEMANA
+  MESES_DIAS_MES
+  TRIMESTRES
+}
+
+enum OrgScopeType {
+  EMPRESA
+  CANAL
+  DEPARTAMENTO
+  TIME
+  MEMBRO
+}
+
+// Modelo genérico para os 7 tipos de análise (Bases para Metas §2), inclusive
+// os combinados: referenceMonth só é preenchido nos tipos "Meses + Dias...";
+// referenceKey guarda o índice do dia/mês/trimestre conforme o analysisType do pai.
+model SeasonalityWeight {
+  id                String  @id @default(cuid())
+  companyId         String
+  seasonalityBaseId String
+  referenceMonth    Int?
+  referenceKey      Int
+  weight            Decimal @db.Decimal(9, 6)
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  seasonalityBase SeasonalityBase @relation(fields: [seasonalityBaseId], references: [id])
+
+  @@index([companyId])
+  @@index([seasonalityBaseId])
+  @@map("seasonality_weights")
+}
+
+// ============================================================
+// 4. METAS
+// ============================================================
+
+// Campanha não fixa mais um único Nível Base — cada GoalLine escolhe sua
+// própria entidade (Empresa/Canal/Departamento/Time/Membro) livremente
+// dentro da mesma campanha. A composição entre níveis passa a ser um ato
+// explícito do gestor (motor AGRUPAMENTO em GoalLine), não mais uma
+// agregação automática amarrada a um Nível Base.
+model GoalCampaign {
+  id            String             @id @default(cuid())
+  companyId     String
+  name          String
+  startDate     DateTime           @db.Date
+  endDate       DateTime           @db.Date
+  resultTypeId  String
+  status        GoalCampaignStatus @default(ATIVA)
+  // Data a partir da qual a campanha deixa de contar para composição de
+  // Recebíveis. Preenchida ao mover status para INATIVA; limpa ao reativar.
+  inactivatedAt DateTime?          @db.Date
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  // Dono da Campanha (PASSO 5b): null = criada antes desta rodada ou pelo
+  // Administrador — só o Administrador edita/exclui/duplica. Gestão só pode
+  // mexer nas Campanhas que ela mesma criou (assertOwnedOrAdmin).
+  createdByUserId String?
+
+  company     Company    @relation(fields: [companyId], references: [id])
+  resultType  ResultType @relation(fields: [resultTypeId], references: [id])
+  createdByUser User?    @relation(fields: [createdByUserId], references: [id])
+
+  // Gatilhos ficam no schema (dormentes na UI de Metas — ReceivablesTierRule
+  // do módulo futuro de Bases de Recebível já depende deles), só não são
+  // mais configurados na tela de criação/configuração de Campanha.
+  triggers                       GoalTrigger[]
+  lines                          GoalLine[]
+  primaryForReceivablesBases     ReceivablesBase[]               @relation("PrimaryGoal")
+  conditionalForReceivablesRules ReceivablesConditionalTrigger[] @relation("ConditionalGoal")
+
+  @@index([companyId])
+  @@map("goal_campaigns")
+}
+
+enum GoalCampaignStatus {
+  ATIVA
+  INATIVA
+  ENCERRADA
+}
+
+// colorFlag = a "flag de cor" citada em Metas §2, chave de validação
+// (Trigger Key) consumida pelas Bases de Recebíveis.
+model GoalTrigger {
+  id             String  @id @default(cuid())
+  companyId      String
+  goalCampaignId String
+  order          Int
+  percentage     Decimal @db.Decimal(7, 2)
+  colorFlag      String
+
+  company      Company      @relation(fields: [companyId], references: [id])
+  goalCampaign GoalCampaign @relation(fields: [goalCampaignId], references: [id])
+
+  @@unique([goalCampaignId, order])
+  @@index([companyId])
+  @@map("goal_triggers")
+}
+
+// Uma Linha por entidade escolhida diretamente pelo gestor (Empresa/Canal/
+// Departamento/Time/Membro — livre, não mais amarrada a um Nível Base da
+// campanha). seasonalityBaseId é só "assistente de preenchimento" (Metas
+// §7) — os valores finais e imutáveis ficam gravados em GoalDailyValue.
+// Exceção deliberada à Persistência Rígida: quando engineType=AGRUPAMENTO,
+// os valores gravados aqui SÃO recalculados automaticamente sempre que uma
+// das Linhas de origem (GoalLineGroupSource) mudar — ver
+// recomputeDependentGroupedLines em metas.service.ts.
+model GoalLine {
+  id                      String         @id @default(cuid())
+  companyId               String
+  goalCampaignId          String
+  entityType              OrgScopeType
+  entityId                String
+  // Ancestralidade denormalizada da árvore organizacional, resolvida uma
+  // única vez (resolveAncestorIds) no momento de criar/reaplicar esta
+  // Linha — evita reconstruir a hierarquia em memória a cada consulta.
+  // Cada coluna só é preenchida quando o nível se aplica: uma Linha de
+  // Time tem teamId/departmentId/channelId preenchidos e memberId nulo;
+  // uma Linha de Membro tem as 4 preenchidas. Sem @relation de propósito
+  // (mesmo padrão de entityId acima — referência solta, só para indexação
+  // rápida de filtro).
+  memberId                String?
+  teamId                  String?
+  departmentId            String?
+  channelId               String?
+  seasonalityBaseId       String?
+  // Sazonalidade diária opcional (Base do tipo Dias da Semana ou Dias do
+  // Mês), aplicada DEPOIS do cálculo mensal para redistribuir o valor de
+  // cada mês entre seus dias de forma não-uniforme (em vez do split igual
+  // padrão). Não interfere no cálculo mensal em si.
+  dailySeasonalityBaseId  String?
+  engineType              GoalEngineType
+  initialValue            Decimal?       @db.Decimal(18, 2)
+  growthRate              Decimal?       @db.Decimal(9, 6)
+  // Só usado quando engineType=AGRUPAMENTO: incide sobre a soma das Linhas
+  // de origem (GoalLineGroupSource) — mesma fórmula do antigo Deságio
+  // Escalonado, agora vivendo na própria Linha em vez de num nó agregado
+  // automático.
+  groupDiscountPercentage Decimal?       @db.Decimal(7, 4)
+  isManualOverride        Boolean        @default(false)
+  // Data a partir da qual esta linha deixa de valer (some da composição de
+  // Recebíveis). null = ativa. Preenchida automaticamente na Data de
+  // Recálculo Inicial quando um "Criar Meta Recalculada" é aplicado sobre
+  // esta linha.
+  inactivatedAt           DateTime?      @db.Date
+  // Se esta linha nasceu de um "Criar Meta Recalculada", aponta para a
+  // linha original que foi desativada — histórico completo permanece no
+  // banco (nunca sobrescrito), diferente do Reforecast (que é só preview).
+  recalculatedFromLineId  String?
+  appliedAt               DateTime?
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+
+  company              Company               @relation(fields: [companyId], references: [id])
+  goalCampaign         GoalCampaign          @relation(fields: [goalCampaignId], references: [id])
+  seasonalityBase      SeasonalityBase?      @relation("MonthlySeasonality", fields: [seasonalityBaseId], references: [id])
+  dailySeasonalityBase SeasonalityBase?      @relation("DailySeasonality", fields: [dailySeasonalityBaseId], references: [id])
+  dailyValues          GoalDailyValue[]
+  recalculatedFrom     GoalLine?             @relation("GoalLineRecalculation", fields: [recalculatedFromLineId], references: [id])
+  recalculatedInto     GoalLine[]            @relation("GoalLineRecalculation")
+  groupSources         GoalLineGroupSource[] @relation("GroupSources")
+
+  // Sem @@unique aqui de propósito: uma entidade pode ter várias linhas ao
+  // longo do tempo (original + recálculos) — só uma fica ativa
+  // (inactivatedAt IS NULL) por vez, regra aplicada na camada de serviço.
+  @@index([goalCampaignId, entityType, entityId])
+  @@index([companyId])
+  @@index([companyId, channelId])
+  @@index([companyId, departmentId])
+  @@index([companyId, teamId])
+  @@index([companyId, memberId])
+  @@map("goal_lines")
+}
+
+enum GoalEngineType {
+  CRESCIMENTO_MENSAL
+  CRESCIMENTO_TRIMESTRAL
+  VALOR_ALVO_ANUAL
+  MANUAL
+  AGRUPAMENTO
+}
+
+// Origens de uma Linha Agrupada (engineType=AGRUPAMENTO em GoalLine).
+// Referencia a CAMPANHA + ENTIDADE de origem (não um goalLineId congelado):
+// assim, se a origem for recalculada (o que troca qual GoalLine.id está
+// ativo) ou simplesmente reeditada, a Agrupada continua resolvendo "a Linha
+// ativa atual daquela entidade" sem precisar reconfigurar nada — ver
+// findActiveGoalLine em metas.service.ts. A origem pode estar em QUALQUER
+// campanha (não precisa ser a mesma da Linha Agrupada) desde que o Tipo de
+// Resultado das duas campanhas seja o mesmo — validado na camada de serviço.
+model GoalLineGroupSource {
+  id                   String       @id @default(cuid())
+  companyId            String
+  goalLineId           String
+  sourceGoalCampaignId String
+  sourceEntityType     OrgScopeType
+  sourceEntityId       String
+
+  company  Company  @relation(fields: [companyId], references: [id])
+  goalLine GoalLine @relation("GroupSources", fields: [goalLineId], references: [id])
+
+  @@unique([goalLineId, sourceGoalCampaignId, sourceEntityType, sourceEntityId])
+  @@index([companyId])
+  @@index([companyId, sourceGoalCampaignId, sourceEntityType, sourceEntityId])
+  @@map("goal_line_group_sources")
+}
+
+// Persistência rígida (Metas §7): valores nominais absolutos por dia. Mês e
+// trimestre são obtidos via agregação (SUM por período) nas queries de leitura,
+// não gravados como colunas redundantes.
+model GoalDailyValue {
+  id         String   @id @default(cuid())
+  companyId  String
+  goalLineId String
+  memberId   String?
+  date       DateTime @db.Date
+  value      Decimal  @db.Decimal(18, 2)
+
+  company  Company  @relation(fields: [companyId], references: [id])
+  goalLine GoalLine @relation(fields: [goalLineId], references: [id])
+  member   Member?  @relation(fields: [memberId], references: [id])
+
+  @@unique([goalLineId, date])
+  @@index([companyId])
+  @@index([memberId, date])
+  @@map("goal_daily_values")
+}
+
+// ============================================================
+// 7. BASES DE RECEBÍVEL
+// ============================================================
+
+// indicatorType decide qual das duas trilhas está ativa: META usa
+// primaryGoalCampaignId (só leitura — % de atingimento); RESULTADO usa
+// resultTypeId (só leitura — Realizado). Nos dois casos os degraus ficam em
+// ReceivablesValueTier (thresholdValue = percentual na trilha META, valor
+// absoluto na trilha RESULTADO), sempre próprios desta Base — nunca
+// compartilhados com outra Base ou com o módulo Metas. Exatamente um dos
+// dois pares (primaryGoalCampaignId/resultTypeId) é preenchido — validado
+// na camada de serviço (bases-recebiveis.service.ts), não em CHECK do banco.
+// Não tem mais Entidade própria — define só O QUÊ medir (Campanha de Meta
+// ou Tipo de Resultado + degraus/regras de recompensa, compartilhados).
+// QUEM medir é escolhido por Beneficiário (ver ReceivablesBeneficiary.
+// entityType/entityId) — permite compor, numa única Base, Beneficiários
+// avaliados individualmente e outros avaliados pelo resultado de um grupo.
+model ReceivablesBase {
+  id                    String                 @id @default(cuid())
+  companyId             String
+  name                  String
+  indicatorType         ReceivablesIndicatorType @default(META)
+  primaryGoalCampaignId String?
+  resultTypeId          String?
+  periodicity           ReceivablesPeriodicity
+  triggerMode           TriggerMode
+  status                ReceivablesStatus      @default(ATIVO)
+  startDate             DateTime?              @db.Date
+  endDate               DateTime?              @db.Date
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  // Dono da Base (PASSO 5b): mesma regra de GoalCampaign.createdByUserId.
+  createdByUserId       String?
+
+  company       Company       @relation(fields: [companyId], references: [id])
+  primaryGoal   GoalCampaign? @relation("PrimaryGoal", fields: [primaryGoalCampaignId], references: [id])
+  resultType    ResultType?   @relation("ReceivablesBaseResultType", fields: [resultTypeId], references: [id])
+  createdByUser User?         @relation(fields: [createdByUserId], references: [id])
+
+  beneficiaries       ReceivablesBeneficiary[]
+  conditionalTriggers ReceivablesConditionalTrigger[]
+  tierRules           ReceivablesTierRule[]
+  valueTiers          ReceivablesValueTier[]
+  financialSnapshots  FinancialPeriodSnapshot[]
+
+  @@index([companyId])
+  @@map("receivables_bases")
+}
+
+enum ReceivablesIndicatorType {
+  META
+  RESULTADO
+}
+
+enum ReceivablesPeriodicity {
+  DIARIO
+  SEMANAL
+  MENSAL
+  TRIMESTRAL
+  ANUAL
+}
+
+enum TriggerMode {
+  FAIXA
+  CUMULATIVO
+}
+
+enum ReceivablesStatus {
+  ATIVO
+  DESATIVADO
+  ENCERRADO
+}
+
+// Degrau de uma Base de Recebível (Bases de Recebível §1/§4), sempre
+// receivablesBaseId-scoped — trilha META guarda o percentual de atingimento
+// em thresholdValue, trilha RESULTADO guarda o valor absoluto do Tipo de
+// Resultado. Não reaproveita GoalTrigger (módulo Metas, goalCampaignId-scoped
+// e portanto compartilhado por toda a Campanha) — ver comentário em
+// ReceivablesTierRule.
+model ReceivablesValueTier {
+  id                String  @id @default(cuid())
+  companyId         String
+  receivablesBaseId String
+  order             Int
+  thresholdValue    Decimal @db.Decimal(18, 2)
+
+  company         Company               @relation(fields: [companyId], references: [id])
+  receivablesBase ReceivablesBase       @relation(fields: [receivablesBaseId], references: [id])
+  tierRules       ReceivablesTierRule[]
+
+  @@unique([receivablesBaseId, order])
+  @@index([companyId])
+  @@map("receivables_value_tiers")
+}
+
+// entityType/entityId = Entidade de Análise DESTE Beneficiário (Bases de
+// Recebível — não existe mais uma Entidade única por Base): decide contra
+// quem os degraus/gatilho principal são avaliados e qual Realizado serve de
+// base para PERCENT_RESULTADO. Pode ser o próprio Membro (avaliação
+// individual) ou qualquer nó acima (ex: o Time inteiro), livre por linha —
+// permite compor, numa mesma Base com os mesmos degraus/regras, Beneficiários
+// avaliados individualmente e outros avaliados pelo resultado do grupo.
+model ReceivablesBeneficiary {
+  id                String       @id @default(cuid())
+  companyId         String
+  receivablesBaseId String
+  memberId          String
+  entityType        OrgScopeType
+  entityId          String
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  receivablesBase ReceivablesBase @relation(fields: [receivablesBaseId], references: [id])
+  member          Member          @relation(fields: [memberId], references: [id])
+
+  @@unique([receivablesBaseId, memberId])
+  @@index([companyId])
+  @@map("receivables_beneficiaries")
+}
+
+// Trava de elegibilidade (Bases de Recebível §2): se AtingimentoReal <
+// mínimo exigido, o beneficiário é zerado (ver pseudocódigo da spec).
+// entityType/entityId é a Entidade Analisada, escolhida explicitamente pelo
+// gestor (não mais derivada da hierarquia do Beneficiário) — pode ser
+// qualquer nível, independente de quem é o Beneficiário. indicatorType
+// decide qual par fica preenchido: META usa conditionalGoalCampaignId +
+// minAttainmentPercentage (resolve a Linha ativa da Entidade Analisada
+// dentro da campanha); RESULTADO usa resultTypeId + minResultValue (valor
+// absoluto do Realizado da Entidade Analisada). Ambos aferidos dentro da
+// janela do Período de Fechamento (ReceivablesBase.periodicity) vigente na
+// data de referência, não do período total da vigência.
+model ReceivablesConditionalTrigger {
+  id                        String                   @id @default(cuid())
+  companyId                 String
+  receivablesBaseId         String
+  // Nível relativo ao Beneficiário a quem a Condição se aplica (não uma
+  // Entidade fixa) — resolvido individualmente para CADA Beneficiário no
+  // momento da avaliação (ver resolveMemberLevelEntity em
+  // bases-recebiveis.service.ts): MEMBRO = o próprio Beneficiário; TIME/
+  // DEPARTAMENTO/CANAL = sobe a ancestralidade estrutural do Beneficiário,
+  // caindo para NodeResponsible se ele for Líder de Nó sem vínculo
+  // estrutural naquele nível; EMPRESA = sempre a companyId.
+  verificationLevel         OrgScopeType
+  indicatorType             ReceivablesIndicatorType @default(META)
+  conditionalGoalCampaignId String?
+  resultTypeId              String?
+  minAttainmentPercentage   Decimal?                 @db.Decimal(7, 2)
+  minResultValue            Decimal?                 @db.Decimal(18, 2)
+  // A quais Beneficiários esta Condição se aplica (memberId de
+  // ReceivablesBeneficiary, sem FK — mesmo padrão de entityId em outros
+  // lugares deste módulo). Lista vazia = aplica-se a TODOS os Beneficiários
+  // da Base (comportamento padrão/anterior). Não vazia = só bloqueia os
+  // Beneficiários listados; os demais ignoram esta Condição por completo.
+  applicableMemberIds       String[]                 @default([])
+
+  company         Company         @relation(fields: [companyId], references: [id])
+  receivablesBase ReceivablesBase @relation(fields: [receivablesBaseId], references: [id])
+  conditionalGoal GoalCampaign?   @relation("ConditionalGoal", fields: [conditionalGoalCampaignId], references: [id])
+  resultType      ResultType?     @relation("ConditionalResultType", fields: [resultTypeId], references: [id])
+
+  @@index([companyId])
+  @@map("receivables_conditional_triggers")
+}
+
+// Um degrau por ReceivablesValueTier dentro da Base (Bases de Recebível §4):
+// cada gatilho aceita um tipo de recompensa (fixo | % resultado | valor fixo |
+// prêmio físico). ReceivablesValueTier é sempre receivablesBaseId-scoped
+// (trilha META usa percentual de atingimento, trilha RESULTADO usa valor
+// absoluto do Tipo de Resultado — mesma tabela, mesmo formato de limiar
+// genérico). Antes a trilha META reaproveitava `GoalTrigger` (do módulo
+// Metas, goalCampaignId-scoped) — removido na 9ª rodada de Bases de
+// Recebível (.planosistemametas): o vínculo entre uma Base de Recebível e a
+// Meta/Resultado que ela analisa é de REFERÊNCIA/LEITURA, nunca de
+// pertencimento, e duas Bases usando a mesma Campanha de Meta não podem
+// compartilhar a mutação dos próprios Degraus (causava degraus somindo
+// silenciosamente quando uma Base salvava e apagava os gatilhos usados por
+// outra).
+model ReceivablesTierRule {
+  id                 String     @id @default(cuid())
+  companyId          String
+  receivablesBaseId  String
+  valueTierId        String
+  rewardType         RewardType
+  rewardResultTypeId String?
+  rewardPercentage   Decimal?   @db.Decimal(7, 4)
+  rewardFixedValue   Decimal?   @db.Decimal(18, 2)
+  rewardDescription  String?
+
+  company          Company              @relation(fields: [companyId], references: [id])
+  receivablesBase  ReceivablesBase      @relation(fields: [receivablesBaseId], references: [id])
+  valueTier        ReceivablesValueTier @relation(fields: [valueTierId], references: [id])
+  rewardResultType ResultType?          @relation("RewardResultType", fields: [rewardResultTypeId], references: [id])
+
+  @@index([companyId])
+  @@index([receivablesBaseId])
+  @@map("receivables_tier_rules")
+}
+
+enum RewardType {
+  PERCENT_FIXO
+  PERCENT_RESULTADO
+  VALOR_FIXO
+  PREMIO_FISICO
+}
+
+// ============================================================
+// 9. FECHAMENTO — snapshot_periodo_financeiro (tabela exigida)
+// ============================================================
+
+// Cabeçalho de um Fechamento (Fechamento §1-4): 1 linha por Membro+Mês —
+// congela Fixo, hierarquia e os totais por tipo de benefício no momento em
+// que o Gestor salva a revisão. `@@unique([memberId, referenceMonth])`:
+// Reabrir apaga esta linha (e as `FinancialPeriodSnapshot` filhas) e Salvar
+// de novo grava OUTRA vez em cima — sobrescreve, não versiona (decisão
+// confirmada com o usuário, segue o SPECIFICATION.md literal).
+model MemberClosing {
+  id             String   @id @default(cuid())
+  companyId      String
+  memberId       String
+  referenceMonth DateTime @db.Date
+  // Hierarquia denormalizada no momento do fechamento (mesmo padrão de
+  // GoalLine/resolveAncestorIds) — nunca lida ao vivo de Member depois de
+  // salvo.
+  teamId                 String?
+  departmentId            String?
+  channelId               String?
+  cargoId                 String
+  fixedSalarySnapshot     Decimal  @db.Decimal(14, 2)
+  // {PERCENT_FIXO, PERCENT_RESULTADO, VALOR_FIXO: valor em Decimal-string,
+  // PREMIO_FISICO: string[] com as descrições} — só os benefícios com
+  // approvalStatus=APROVADO entram nesta soma.
+  benefitsByType Json
+  // [{resultTypeId, resultTypeName, totalValue}] — TODOS os Tipos de
+  // Resultado lançados pelo Membro no mês (ResultEntry+OperationalAdjustment),
+  // independente de terem alimentado alguma Meta/Recebível ativa.
+  resultsByType Json
+  // Resumo gerado em texto único: 1 linha por Campanha de Recebível ativa
+  // no fechamento + o valor apurado + status de aprovação.
+  campaignsSummaryText   String
+  totalValue             Decimal  @db.Decimal(18, 2)
+  manualAdjustmentValue  Decimal? @db.Decimal(18, 2)
+  manualAdjustmentReason String?
+  comments               String?
+  closedAt               DateTime
+  // Opcional (String?, onDelete: SetNull) — o Login de quem fechou pode ser
+  // excluído (Usuário é só um acesso, ver deleteUser em
+  // permissoes.service.ts); o Fechamento em si permanece intacto, só perde
+  // a atribuição de quem fechou.
+  closedByUserId         String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  company  Company @relation(fields: [companyId], references: [id])
+  member   Member  @relation(fields: [memberId], references: [id])
+  cargo    Cargo   @relation(fields: [cargoId], references: [id])
+  closedBy User?   @relation(fields: [closedByUserId], references: [id])
+
+  snapshots FinancialPeriodSnapshot[]
+
+  @@unique([memberId, referenceMonth])
+  @@index([companyId])
+  @@map("member_closings")
+}
+
+// Linha-filha por Campanha de Recebível dentro de um `MemberClosing`
+// (Fechamento §2 / Cargos §4): dados denormalizados de propósito — não
+// depende de leitura viva de GoalDailyValue/ReceivablesTierRule, para nunca
+// ser afetado por edições futuras nesses módulos. `periodStart`/
+// `periodEndExclusive` são a janela REAL desta Base (`resolvePeriodWindow`),
+// não o mês do `MemberClosing` — Bases Semanais/Trimestrais/Anuais não
+// coincidem com o recorte mensal do cabeçalho.
+model FinancialPeriodSnapshot {
+  id                  String   @id @default(cuid())
+  companyId           String
+  memberClosingId     String
+  memberId            String
+  receivablesBaseId   String
+  periodStart         DateTime @db.Date
+  periodEndExclusive  DateTime @db.Date
+  realizedNetValue    Decimal  @db.Decimal(18, 2)
+  // null na trilha RESULTADO (não existe % de atingimento de Meta nesse caso).
+  attainmentPercentage Decimal? @db.Decimal(7, 2)
+  // TierPayoutBreakdown[] congelado (order/rewardType/baseValueUsed/
+  // computedAmount/physicalPrizeDescription) — cobre Cumulativo (N degraus
+  // atingidos) sem depender de FK viva para ReceivablesTierRule.
+  tierBreakdown            Json
+  eligibilityStatus        Boolean                @default(true)
+  blockedReason            String?
+  payoutValue              Decimal                @db.Decimal(18, 2)
+  physicalPrizeDescription String?
+  // Aprovação por Campanha (não por degrau individual dentro do
+  // Cumulativo) — "usual" é APROVADO (verde na UI); REPROVADO some da soma
+  // do MemberClosing (cinza na UI).
+  approvalStatus BenefitApprovalStatus @default(APROVADO)
+
+  company         Company       @relation(fields: [companyId], references: [id])
+  memberClosing   MemberClosing @relation(fields: [memberClosingId], references: [id])
+  member          Member        @relation(fields: [memberId], references: [id])
+  receivablesBase ReceivablesBase @relation(fields: [receivablesBaseId], references: [id])
+
+  // Uma Base pode contribuir mais de uma janela dentro do mesmo mês do
+  // MemberClosing (ex: Base Semanal ~4 janelas/mês) — cada janela real vira
+  // sua própria linha, por isso a unicidade inclui periodStart.
+  @@unique([memberClosingId, receivablesBaseId, periodStart])
+  @@index([companyId])
+  @@map("snapshot_periodo_financeiro")
+}
+
+enum BenefitApprovalStatus {
+  APROVADO
+  REPROVADO
+}
+
+// Log de auditoria (Fechamento §4, segurança jurídica) — referência SOLTA a
+// memberId+referenceMonth (não FK para MemberClosing): Reabrir APAGA o
+// MemberClosing (sobrescreve, não versiona — ver comentário acima), então um
+// FK duro quebraria a trilha de auditoria assim que o Fechamento fosse
+// reaberto. O log tem que sobreviver ao ciclo Fechar→Reabrir→Fechar inteiro.
+model ClosureAuditLog {
+  id             String        @id @default(cuid())
+  companyId      String
+  memberId       String
+  referenceMonth DateTime      @db.Date
+  // Opcional (String?, onDelete: SetNull) — o Login de quem realizou a ação
+  // pode ser excluído (Usuário é só um acesso, ver deleteUser em
+  // permissoes.service.ts); a entrada de auditoria em si permanece
+  // intacta, só perde a atribuição de quem agiu.
+  userId         String?
+  action         ClosureAction
+  totalsBefore   Json?
+  totalsAfter    Json?
+  createdAt      DateTime      @default(now())
+
+  company Company @relation(fields: [companyId], references: [id])
+  member  Member  @relation(fields: [memberId], references: [id])
+  user    User?   @relation(fields: [userId], references: [id])
+
+  @@index([companyId])
+  @@map("closure_audit_logs")
+}
+
+enum ClosureAction {
+  FECHAMENTO
+  REABERTURA
+}
+
+// ============================================================
+// NOTIFICAÇÕES (Fase 5 do plano de migração Supabase) — único model
+// exposto ao Realtime (Postgres Changes). userId aqui é o authUserId
+// (uuid da identidade no Supabase Auth), não User.id: a política RLS de
+// authenticated usa auth.uid(), que só compara contra essa coluna.
+// companyId continua presente por padrão (todo model de negócio tem), mas
+// não é usado na política — o isolamento aqui é por usuário, não por
+// tenant (um authUserId só pertence a uma sessão por vez de qualquer
+// forma).
+// ============================================================
+
+model Notification {
+  id        String   @id @default(cuid())
+  companyId String
+  // authUserId da identidade Supabase — não User.id.
+  userId    String
+  title     String
+  body      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
+  @@index([userId])
+  @@map("notifications")
+}

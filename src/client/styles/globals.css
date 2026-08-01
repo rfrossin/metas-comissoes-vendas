@@ -1,0 +1,87 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Paleta de marca GMC (rossinvendas.com) — ver DESIGN.md. Valores extraídos
+   diretamente do CSS de produção do site institucional:
+   --color-brand-magenta:#fc0049 --color-brand-black:#0e0e0e
+   --color-brand-white:#fffef4 --color-brand-green:#22c55e */
+@layer base {
+  :root {
+    --background: 54.5 100% 97.8%; /* brand-white (cream), não branco puro */
+    --foreground: 0 0% 5.5%; /* brand-black */
+    --card: 54.5 100% 97.8%;
+    --card-foreground: 0 0% 5.5%;
+    --popover: 54.5 100% 97.8%;
+    --popover-foreground: 0 0% 5.5%;
+    /* --primary/--success/--destructive são a marca-fonte (#fc0049 L49.4,
+       #22c55e L45.3, L60.2 vermelho) escurecidas até 4.5:1 contra o fundo
+       creme (--background) — a critique desta sessão mediu 3.7-4.0:1 (falha
+       WCAG AA) nos valores de fábrica; texto/botão sólido nessas cores agora
+       fecha em ~4.66-4.82:1 sem trocar o matiz (mesmo hue/sat, só L menor). */
+    --primary: 342.6 100% 45%; /* brand-magenta, escurecida p/ 4.66:1 */
+    --primary-foreground: 54.5 100% 97.8%; /* brand-white */
+    --secondary: 50 20% 94%; /* cinza quente, mesma família de matiz do cream */
+    --secondary-foreground: 0 0% 5.5%;
+    --muted: 50 20% 94%;
+    --muted-foreground: 45 8% 40%;
+    --accent: 50 20% 94%;
+    --accent-foreground: 0 0% 5.5%;
+    --success: 142.1 70.6% 30%; /* brand-green, escurecida p/ 4.77:1 — único papel: meta atingida / validação OK */
+    --success-foreground: 54.5 100% 97.8%;
+    --destructive: 0 84.2% 48%; /* funcional, fora da paleta de marca — escurecida p/ 4.82:1, continua distinto do magenta */
+    --destructive-foreground: 210 40% 98%;
+    --border: 45 20% 88%; /* hairline quente */
+    --input: 45 20% 88%;
+    --ring: 342.6 100% 45%; /* brand-magenta — foco usa a mesma cor de ação */
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+
+  /* Nenhum estado de foco existia antes desta regra (0 ocorrências de
+     focus-visible/ring-* na base) — teclado ficava sem indicação visual em
+     qualquer input, select ou botão. Regra única e global em vez de tocar
+     cada componente. */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  /* Idem para hover do botão primário sólido: bg-primary não tinha nenhum
+     tratamento de hover em nenhuma tela. */
+  button.bg-primary:not(:disabled):hover {
+    background-color: hsl(var(--primary) / 0.9);
+  }
+}
