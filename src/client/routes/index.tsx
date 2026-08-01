@@ -1,5 +1,6 @@
 import { Navigate, Routes, Route } from "react-router-dom";
 import { RequireAuth } from "./RequireAuth";
+import { RequireAuthNoShell } from "./RequireAuthNoShell";
 import { RequireRole } from "./RequireRole";
 import { RequirePlatformAuth } from "./RequirePlatformAuth";
 import { LoginPage } from "@/pages/auth/LoginPage";
@@ -22,6 +23,7 @@ import { BeneficiaryReceivablesBaseDetailPage } from "@/pages/bases-recebiveis/B
 import { RecebiveisPage } from "@/pages/recebiveis/RecebiveisPage";
 import { FechamentoPage } from "@/pages/fechamento/FechamentoPage";
 import { MemberClosingDetailPage } from "@/pages/fechamento/MemberClosingDetailPage";
+import { ImprimirFechamentosPage } from "@/pages/fechamento/ImprimirFechamentosPage";
 import { UsuariosPage } from "@/pages/usuarios/UsuariosPage";
 import { AceitarConvitePage } from "@/pages/convite/AceitarConvitePage";
 
@@ -171,6 +173,14 @@ export function AppRoutes() {
               <MemberClosingDetailPage />
             </RequireRole>
           </RequireAuth>
+        }
+      />
+      <Route
+        path="/fechamento/imprimir"
+        element={
+          <RequireAuthNoShell>
+            <ImprimirFechamentosPage />
+          </RequireAuthNoShell>
         }
       />
       <Route path="/permissoes" element={<Navigate to="/usuarios" replace />} />

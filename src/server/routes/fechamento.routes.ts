@@ -1,6 +1,5 @@
 import { Router } from "express";
 import {
-  exportClosingsPdfHandler,
   getClosingDetailHandler,
   listClosingsHandler,
   listCommercialPeriodsHandler,
@@ -26,7 +25,6 @@ fechamentoRoutes.post("/list", asyncHandler(listClosingsHandler));
 // de "/list" por clareza.
 fechamentoRoutes.post("/bulk-save", asyncHandler(saveClosingBulkHandler));
 fechamentoRoutes.post("/bulk-reopen", asyncHandler(reopenClosingBulkHandler));
-fechamentoRoutes.post("/export-pdf", asyncHandler(exportClosingsPdfHandler));
 fechamentoRoutes.get("/:memberId/:referenceMonth", asyncHandler(getClosingDetailHandler));
 fechamentoRoutes.put("/:memberId/:referenceMonth", asyncHandler(saveClosingHandler));
 fechamentoRoutes.delete("/:memberId/:referenceMonth", asyncHandler(reopenClosingHandler));

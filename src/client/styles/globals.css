@@ -85,3 +85,34 @@
     background-color: hsl(var(--primary) / 0.9);
   }
 }
+
+/* Impressão da tela de Fechamento (ImprimirFechamentosPage), substituindo o
+   antigo page.pdf() do Puppeteer — replica exatamente format:"A4" e as
+   margens 16mm/12mm que o servidor usava. */
+@media print {
+  /* darkMode é só via classe .dark (tailwind.config.ts) — se estiver
+     presente na impressão, força as variáveis claras: impressão em modo
+     escuro imprimiria fundo preto. */
+  :root,
+  .dark {
+    --background: 54.5 100% 97.8%;
+    --foreground: 0 0% 5.5%;
+    --card: 54.5 100% 97.8%;
+    --card-foreground: 0 0% 5.5%;
+    --border: 45 20% 88%;
+    --muted-foreground: 45 8% 40%;
+  }
+
+  @page {
+    size: A4;
+    margin: 16mm 12mm;
+  }
+
+  /* Cada Membro começa em página nova — mesma regra do antigo
+     .detail-page { page-break-before: always } do fechamento-pdf.service.ts.
+     (break-inside-avoid nos cartões/grades já é uma classe utility nativa
+     do Tailwind, aplicada direto no JSX — não precisa de regra aqui.) */
+  .detail-page {
+    break-before: page;
+  }
+}

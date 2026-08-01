@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import axios from "axios";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/store/auth.store";
 import { EntityMultiPicker } from "@/pages/acompanhamento/EntityMultiPicker";
@@ -9,7 +8,6 @@ import type { ScopeType } from "@/pages/bases-metas/ScopeSelector";
 import {
   useClosingsList,
   useCommercialPeriods,
-  useExportClosingsPdf,
   useReopenClosingBulk,
   useSaveClosingBulk,
   useSetCommercialPeriodStatus,
@@ -49,23 +47,6 @@ function firstDayOfCurrentMonthIso(): string {
 function lastDayOfCurrentMonthIso(): string {
   const now = new Date();
   return new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0)).toISOString().slice(0, 10);
-}
-
-// api.post com responseType:"blob" faz o axios devolver o corpo do erro
-// também como Blob (não parseado) — sem isso, um 409 do backend (ex.:
-// Fechamento reaberto entre a seleção e o clique) apareceria como um erro
-// genérico, escondendo a mensagem real que o backend já manda certinha.
-async function extractPdfErrorMessage(error: unknown): Promise<string> {
-  if (axios.isAxiosError(error) && error.response?.data instanceof Blob) {
-    try {
-      const text = await error.response.data.text();
-      const parsed = JSON.parse(text) as { message?: string };
-      if (typeof parsed.message === "string") return parsed.message;
-    } catch {
-      // corpo do erro não era JSON — usa o fallback abaixo.
-    }
-  }
-  return "Não foi possível exportar o PDF.";
 }
 
 // Central do Gestor Administrador (spec § Fechamento): lista todos os
@@ -200,24 +181,12 @@ export function FechamentoPage() {
     });
   }
 
-  const exportPdf = useExportClosingsPdf();
-  const [exportError, setExportError] = useState<string | null>(null);
-
-  function exportSelected() {
-    setExportError(null);
-    exportPdf.mutate(selectedFechadoItems, {
-      onSuccess: (blob) => {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `fechamentos-${new Date().toISOString().slice(0, 10)}.pdf`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-      },
-      onError: async (mutationError) => setExportError(await extractPdfErrorMessage(mutationError)),
-    });
+  // Imprimir substitui a antiga geração de PDF via Puppeteer no servidor —
+  // abre a tela de impressão em nova aba, que carrega os detalhes e chama
+  // window.print(). Os pares Membro+Mês vão na query string.
+  function printSelected() {
+    const itemsParam = selectedFechadoItems.map((item) => `${item.memberId}:${item.referenceMonth}`).join(",");
+    window.open(`/fechamento/imprimir?items=${encodeURIComponent(itemsParam)}`, "_blank");
   }
 
   // `replace: true` — cada tecla digitada no filtro não deveria empilhar uma
@@ -380,11 +349,10 @@ export function FechamentoPage() {
               {selectedFechadoItems.length > 0 && (
                 <button
                   type="button"
-                  disabled={exportPdf.isPending}
-                  onClick={exportSelected}
+                  onClick={printSelected}
                   className="rounded-md border border-border px-3 py-1.5 text-sm text-foreground hover:bg-secondary/50 disabled:opacity-50"
                 >
-                  {exportPdf.isPending ? "Exportando..." : `Exportar Selecionados em PDF (${selectedFechadoItems.length})`}
+                  {`Imprimir Selecionados (${selectedFechadoItems.length})`}
                 </button>
               )}
               <button type="button" onClick={() => setSelected(new Set())} className="text-xs text-muted-foreground hover:underline">
@@ -394,8 +362,6 @@ export function FechamentoPage() {
           )}
         </div>
       )}
-
-      {exportError && <p className="text-sm text-destructive">{exportError}</p>}
 
       {bulkSummary && (
         <p className="text-sm text-muted-foreground">

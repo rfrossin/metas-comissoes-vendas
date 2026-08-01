@@ -10,7 +10,6 @@ import {
   saveClosingBulk,
   setCommercialPeriodStatus,
 } from "../services/fechamento.service";
-import { exportClosingsPdf } from "../services/fechamento-pdf.service";
 import { ConflictError, ForbiddenError, NotFoundError } from "../utils/http-errors";
 import { isoDate } from "./resultados.controller";
 
@@ -114,21 +113,6 @@ export async function reopenClosingBulkHandler(req: Request, res: Response) {
   try {
     const results = await reopenClosingBulk(req.user!.companyId, req.user!, parsed.data.items);
     res.json(results);
-  } catch (error) {
-    respondToError(error, res);
-  }
-}
-
-export async function exportClosingsPdfHandler(req: Request, res: Response) {
-  const parsed = bulkSaveSchema.safeParse(req.body);
-  if (!parsed.success) return badRequest(res);
-
-  try {
-    const pdfBuffer = await exportClosingsPdf(req.user!.companyId, req.user!, parsed.data.items);
-    const today = new Date().toISOString().slice(0, 10);
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="fechamentos-${today}.pdf"`);
-    res.send(pdfBuffer);
   } catch (error) {
     respondToError(error, res);
   }

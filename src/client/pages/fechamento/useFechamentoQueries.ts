@@ -72,15 +72,6 @@ export function useReopenClosingBulk() {
   });
 }
 
-export function useExportClosingsPdf() {
-  return useMutation({
-    mutationFn: async (items: CloseBulkItem[]) => {
-      const { data } = await api.post<Blob>("/fechamento/export-pdf", { items }, { responseType: "blob" });
-      return data;
-    },
-  });
-}
-
 export function useReopenClosing(memberId: string, referenceMonth: string) {
   const queryClient = useQueryClient();
   return useMutation({
