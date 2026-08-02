@@ -1,6 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { getErrorMessage } from "@/services/api";
 import { supabase } from "@/services/supabase";
 
 // Pública — o link do e-mail de "esqueci minha senha" (resetPasswordForEmail)
@@ -67,13 +66,19 @@ export function RedefinirSenhaPage() {
     setIsSubmitting(true);
     try {
       const { error: updateError } = await supabase.auth.updateUser({ password });
-      if (updateError) throw new Error(updateError.message);
+      if (updateError) throw updateError;
 
       await supabase.auth.signOut();
       setIsDone(true);
       setTimeout(() => navigate("/login"), 2000);
     } catch (err) {
-      setError(getErrorMessage(err, "Não foi possível redefinir a senha. O link pode ter expirado."));
+      // Mostra a mensagem real do Supabase (AuthError não é AxiosError, o
+      // helper compartilhado getErrorMessage não o reconhece) — "link
+      // expirado" é só uma das causas possíveis; outras: sessão já
+      // consumida por dupla execução do efeito, requisito de senha não
+      // atendido no lado do servidor, etc.
+      const message = err instanceof Error ? err.message : "Não foi possível redefinir a senha.";
+      setError(message);
     } finally {
       setIsSubmitting(false);
     }
