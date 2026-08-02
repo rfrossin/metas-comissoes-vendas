@@ -11,6 +11,14 @@ import { env } from "./config/env";
 
 export const app = express();
 
+// Backend roda atrás do Caddy (reverse proxy no VPS) — sem isso, req.ip e
+// o express-rate-limit enxergam o IP interno do Docker (o mesmo para
+// TODOS os visitantes), não o IP real de cada um. Causava o rate limit de
+// login (authRateLimiter) bloquear o site inteiro para todo mundo assim
+// que qualquer pessoa errasse a senha algumas vezes. "1" confia no
+// primeiro hop da cadeia (o Caddy), único proxy nesta topologia.
+app.set("trust proxy", 1);
+
 app.use(helmet());
 // Restrito à origin do front — a auth usa header Authorization (não
 // cookie), então não há necessidade de credentials: true.
