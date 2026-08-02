@@ -21,6 +21,13 @@ function addDaysUtc(date: Date, amount: number): Date {
   return result;
 }
 
+// Duplicada de fechamento.service.ts (não importada de lá para evitar
+// ciclo: fechamento.service.ts já importa computeMemberReceivablesRows
+// deste arquivo) — mesma implementação trivial de 1 linha.
+function firstDayOfMonthUtc(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
 // ============================================================
 // Status da janela (Recebíveis, macroambiente 8) — computado, não
 // persistido. FECHADO só passa a ocorrer quando o Fechamento (PASSO 3,
@@ -37,17 +44,78 @@ export function resolveWindowStatus(window: PeriodWindow, referenceDate: Date, h
   return hasSnapshot ? "FECHADO" : "LIBERADO";
 }
 
-async function hasFinancialSnapshot(companyId: string, memberId: string, receivablesBaseId: string, window: PeriodWindow): Promise<boolean> {
-  const count = await prisma.financialPeriodSnapshot.count({
+// ============================================================
+// Snapshot do Fechamento — quando um Membro+Mês já tem um MemberClosing
+// salvo, Recebíveis passa a exibir os valores CONGELADOS dali (Fixo e
+// payout de cada janela) em vez de recalcular ao vivo. Um mês reaberto
+// (MemberClosing apagado) volta a cair no cálculo ao vivo automaticamente,
+// pela simples ausência no mapa pré-carregado. Ver getClosingDetail em
+// fechamento.service.ts — mesmo padrão "snapshot se existir, senão live".
+// ============================================================
+
+export interface ClosingSnapshotContext {
+  // chave: `${memberId}|${monthKeyOf(referenceMonth)}` — Fixo é por mês civil.
+  closingByMemberMonth: Map<string, { fixedSalarySnapshot: Prisma.Decimal }>;
+  // chave: `${memberId}|${receivablesBaseId}|${isoKey(periodStart)}` —
+  // Benefício é por janela exata (uma Base Semanal tem várias janelas/mês).
+  snapshotByWindowKey: Map<
+    string,
+    {
+      realizedNetValue: Prisma.Decimal;
+      attainmentPercentage: Prisma.Decimal | null;
+      tierBreakdown: TierPayoutBreakdown[];
+      eligibilityStatus: boolean;
+      blockedReason: string | null;
+      payoutValue: Prisma.Decimal;
+      physicalPrizeDescription: string | null;
+    }
+  >;
+}
+
+export function windowSnapshotKey(memberId: string, receivablesBaseId: string, periodStart: Date): string {
+  return `${memberId}|${receivablesBaseId}|${isoKey(periodStart)}`;
+}
+
+// Pré-carrega, de uma vez, todos os MemberClosing+FinancialPeriodSnapshot
+// dos Membros dentro do range consultado — evita 1 query por janela por
+// Base por Membro (era o padrão antigo via hasFinancialSnapshot).
+export async function loadClosingSnapshotContext(
+  companyId: string,
+  memberIds: string[],
+  periodStart: Date,
+  periodEndExclusive: Date,
+): Promise<ClosingSnapshotContext> {
+  const closingByMemberMonth: ClosingSnapshotContext["closingByMemberMonth"] = new Map();
+  const snapshotByWindowKey: ClosingSnapshotContext["snapshotByWindowKey"] = new Map();
+  if (memberIds.length === 0) return { closingByMemberMonth, snapshotByWindowKey };
+
+  const closings = await prisma.memberClosing.findMany({
     where: {
       companyId,
-      memberId,
-      receivablesBaseId,
-      periodStart: window.start,
-      periodEndExclusive: window.endExclusive,
+      memberId: { in: memberIds },
+      referenceMonth: { gte: firstDayOfMonthUtc(periodStart), lt: periodEndExclusive },
     },
+    include: { snapshots: true },
   });
-  return count > 0;
+
+  for (const closing of closings) {
+    closingByMemberMonth.set(`${closing.memberId}|${monthKeyOf(closing.referenceMonth)}`, {
+      fixedSalarySnapshot: closing.fixedSalarySnapshot,
+    });
+    for (const snapshot of closing.snapshots) {
+      snapshotByWindowKey.set(windowSnapshotKey(snapshot.memberId, snapshot.receivablesBaseId, snapshot.periodStart), {
+        realizedNetValue: snapshot.realizedNetValue,
+        attainmentPercentage: snapshot.attainmentPercentage,
+        tierBreakdown: snapshot.tierBreakdown as unknown as TierPayoutBreakdown[],
+        eligibilityStatus: snapshot.eligibilityStatus,
+        blockedReason: snapshot.blockedReason,
+        payoutValue: snapshot.payoutValue,
+        physicalPrizeDescription: snapshot.physicalPrizeDescription,
+      });
+    }
+  }
+
+  return { closingByMemberMonth, snapshotByWindowKey };
 }
 
 // ============================================================
@@ -76,7 +144,7 @@ export async function assertCanViewMembers(
 // Resolução de Membros selecionados (filtro de Escopo da tela)
 // ============================================================
 
-interface MemberLite {
+export interface MemberLite {
   id: string;
   fullName: string;
   customFixedSalary: Prisma.Decimal | null;
@@ -95,6 +163,16 @@ async function resolveSelectedMembers(companyId: string, entityType: OrgScopeTyp
     where,
     select: { id: true, fullName: true, customFixedSalary: true, cargo: { select: { id: true, name: true, defaultFixedSalary: true } } },
   });
+}
+
+// Fixo de um Membro num mês específico: usa o valor CONGELADO do
+// Fechamento se o mês já foi fechado para esse Membro; senão, calcula ao
+// vivo (Member.customFixedSalary ou Cargo.defaultFixedSalary atuais).
+export function resolveMonthlyFixedSalary(member: MemberLite, monthKey: string, snapshotContext: ClosingSnapshotContext): Prisma.Decimal {
+  const frozen = snapshotContext.closingByMemberMonth.get(`${member.id}|${monthKey}`);
+  if (frozen) return frozen.fixedSalarySnapshot;
+  if (!member.cargo) return new Prisma.Decimal(0);
+  return resolveFixedSalary({ customFixedSalary: member.customFixedSalary }, { defaultFixedSalary: member.cargo.defaultFixedSalary });
 }
 
 // ============================================================
@@ -147,6 +225,7 @@ export async function computeMemberReceivablesRows(
   periodEndExclusive: Date,
   referenceDate: Date,
   baseCache: Map<string, ReceivablesBaseDetail>,
+  snapshotContext?: ClosingSnapshotContext,
 ): Promise<MemberReceivableRow[]> {
   const beneficiaries = await loadRelevantBeneficiaries(companyId, [memberId], periodStart, periodEndExclusive);
   const rows: MemberReceivableRow[] = [];
@@ -168,10 +247,42 @@ export async function computeMemberReceivablesRows(
     const windows = enumeratePeriodWindows(base.periodicity, vigenciaStart, rangeEnd);
 
     for (const window of windows) {
-      const snapshotExists = await hasFinancialSnapshot(companyId, memberId, base.id, window);
-      const status = resolveWindowStatus(window, referenceDate, snapshotExists);
-      const outcome = await computeLiveReceivablesOutcome(companyId, base, baseBeneficiary, window);
+      const frozen = snapshotContext?.snapshotByWindowKey.get(windowSnapshotKey(memberId, base.id, window.start));
+      const status = resolveWindowStatus(window, referenceDate, !!frozen);
       const indicatorLabel = base.indicatorType === "META" ? (base.primaryGoal?.name ?? "—") : (base.resultType?.name ?? "—");
+
+      if (frozen) {
+        // Fechado: valores CONGELADOS no FinancialPeriodSnapshot — nunca
+        // recalculados, mesmo que Cargo/Member/regras da Base tenham mudado
+        // depois do Fechamento (mesmo padrão de getClosingDetail).
+        const topAchieved = frozen.tierBreakdown[frozen.tierBreakdown.length - 1] ?? null;
+        rows.push({
+          receivablesBaseId: base.id,
+          baseName: base.name,
+          indicatorType: base.indicatorType,
+          indicatorLabel,
+          periodicity: base.periodicity,
+          triggerMode: base.triggerMode,
+          periodStart: window.start,
+          periodEndExclusive: window.endExclusive,
+          status,
+          attainmentValue: frozen.attainmentPercentage ?? frozen.realizedNetValue,
+          mainRealized: frozen.realizedNetValue,
+          currentTierLabel: topAchieved ? `Gatilho ${topAchieved.order}` : null,
+          eligible: frozen.eligibilityStatus,
+          blockedReason: frozen.blockedReason,
+          payoutValue: frozen.payoutValue,
+          physicalPrizeDescription: frozen.physicalPrizeDescription,
+          // "Próximo degrau"/"potencial" são projeção de janela em
+          // andamento — sem sentido para um período já fechado.
+          nextTierGap: null,
+          topTierPotentialPayout: new Prisma.Decimal(0),
+          tierBreakdown: frozen.tierBreakdown,
+        });
+        continue;
+      }
+
+      const outcome = await computeLiveReceivablesOutcome(companyId, base, baseBeneficiary, window);
       const topAchieved = outcome.achievedTiers[outcome.achievedTiers.length - 1] ?? null;
       const currentTierLabel = topAchieved ? `Gatilho ${topAchieved.order}` : null;
 
@@ -246,7 +357,8 @@ export async function getMemberGanhoPorMeta(
   const periodEndExclusive = addDaysUtc(toDate(periodEndIso), 1);
   const referenceDate = new Date();
 
-  const rows = await computeMemberReceivablesRows(companyId, memberId, periodStart, periodEndExclusive, referenceDate, new Map());
+  const snapshotContext = await loadClosingSnapshotContext(companyId, [memberId], periodStart, periodEndExclusive);
+  const rows = await computeMemberReceivablesRows(companyId, memberId, periodStart, periodEndExclusive, referenceDate, new Map(), snapshotContext);
   return { member, rows: rows.map(serializeRow) };
 }
 
@@ -287,10 +399,12 @@ export async function getReceivablesOverview(
   const periodEndExclusive = addDaysUtc(toDate(filters.periodEnd), 1);
   const referenceDate = new Date();
 
+  const snapshotContext = await loadClosingSnapshotContext(companyId, memberIds, periodStart, periodEndExclusive);
+
   const baseCache = new Map<string, ReceivablesBaseDetail>();
   const memberRows: { member: MemberLite; rows: MemberReceivableRow[] }[] = [];
   for (const member of members) {
-    const rows = await computeMemberReceivablesRows(companyId, member.id, periodStart, periodEndExclusive, referenceDate, baseCache);
+    const rows = await computeMemberReceivablesRows(companyId, member.id, periodStart, periodEndExclusive, referenceDate, baseCache, snapshotContext);
     memberRows.push({ member, rows });
   }
 
@@ -315,9 +429,9 @@ export async function getReceivablesOverview(
   const fixoPorMes = new Map<string, Prisma.Decimal>();
   for (const { member } of memberRows) {
     if (!member.cargo) continue;
-    const monthlySalary = resolveFixedSalary({ customFixedSalary: member.customFixedSalary }, { defaultFixedSalary: member.cargo.defaultFixedSalary });
-    fixoTotal = fixoTotal.plus(monthlySalary.times(monthKeys.length));
     for (const monthKey of monthKeys) {
+      const monthlySalary = resolveMonthlyFixedSalary(member, monthKey, snapshotContext);
+      fixoTotal = fixoTotal.plus(monthlySalary);
       fixoPorMes.set(monthKey, (fixoPorMes.get(monthKey) ?? new Prisma.Decimal(0)).plus(monthlySalary));
     }
   }
@@ -396,9 +510,7 @@ export async function getReceivablesOverview(
               .filter((r) => r.status !== "PREVISTO")
               .reduce((acc, r) => acc + r.tierBreakdown.filter((t) => t.physicalPrizeDescription).length, 0);
             const salarioFixo = member.cargo
-              ? resolveFixedSalary({ customFixedSalary: member.customFixedSalary }, { defaultFixedSalary: member.cargo.defaultFixedSalary }).times(
-                  monthKeys.length,
-                )
+              ? monthKeys.reduce((acc, monthKey) => acc.plus(resolveMonthlyFixedSalary(member, monthKey, snapshotContext)), new Prisma.Decimal(0))
               : new Prisma.Decimal(0);
             return {
               memberId: member.id,
