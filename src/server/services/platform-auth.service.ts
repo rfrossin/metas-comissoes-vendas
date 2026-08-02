@@ -37,7 +37,11 @@ export async function platformLogin({ email, password }: PlatformLoginInput): Pr
     where: { authUserId: data.user.id },
   });
   if (!platformUser) {
-    throw new UnauthorizedError("Esta identidade não tem acesso ao painel da plataforma.");
+    // Mesma mensagem da branch de senha errada acima — evita que alguém com
+    // uma conta Supabase válida (mas sem PlatformUser vinculado) descubra,
+    // por diferença de mensagem, que o e-mail existe no Auth mas não tem
+    // acesso à plataforma.
+    throw new UnauthorizedError("Credenciais inválidas");
   }
 
   const token = jwt.sign(

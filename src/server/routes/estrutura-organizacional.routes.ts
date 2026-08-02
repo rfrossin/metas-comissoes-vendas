@@ -20,10 +20,12 @@ import {
 } from "../controllers/estrutura-organizacional.controller";
 import { bulkImportCommitHandler, bulkImportPreviewHandler } from "../controllers/bulk-import.controller";
 import { asyncHandler } from "../utils/async-handler";
+import { spreadsheetFileFilter } from "../utils/spreadsheet-file-filter";
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: spreadsheetFileFilter,
 });
 
 export const estruturaOrganizacionalRoutes = Router();

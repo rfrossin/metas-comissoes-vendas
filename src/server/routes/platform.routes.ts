@@ -9,6 +9,7 @@ import {
   rejectCompanySignupRequestHandler,
 } from "../controllers/platform.controller";
 import { platformAuthMiddleware } from "../middlewares/platform-auth.middleware";
+import { authRateLimiter } from "../middlewares/rate-limit.middleware";
 import { asyncHandler } from "../utils/async-handler";
 
 // Montado em /api/plataforma, fora do tenantMiddleware — o Super Admin não
@@ -16,7 +17,7 @@ import { asyncHandler } from "../utils/async-handler";
 // todo o resto exige platformAuthMiddleware.
 export const platformRoutes = Router();
 
-platformRoutes.post("/login", asyncHandler(platformLoginHandler));
+platformRoutes.post("/login", authRateLimiter, asyncHandler(platformLoginHandler));
 
 platformRoutes.use(platformAuthMiddleware);
 platformRoutes.get("/pedidos-empresa", asyncHandler(listCompanySignupRequestsHandler));

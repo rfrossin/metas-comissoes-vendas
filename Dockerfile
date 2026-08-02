@@ -37,5 +37,12 @@ ENV PRISMA_QUERY_ENGINE_LIBRARY=/app/node_modules/.prisma/client/libquery_engine
 
 COPY --from=build /app/dist ./dist
 
+# Roda como usuário sem privilégio — reduz o blast radius se o processo
+# Node for comprometido (sem permissão para instalar pacotes, alterar
+# arquivos de sistema, etc.). A aplicação não escreve em disco (uploads
+# são multer.memoryStorage()), então não precisa de diretório gravável.
+RUN groupadd -r appuser && useradd -r -g appuser appuser && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 3333
 CMD ["node", "dist/server/index.js"]
