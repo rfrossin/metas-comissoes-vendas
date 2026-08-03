@@ -6,7 +6,11 @@ vi.mock("../config/prisma", () => ({
   prisma: { company: { findUnique: (...args: unknown[]) => findUnique(...args) } },
 }));
 
-const { companyStatusGuard } = await import("./company-status.middleware");
+// Import estático (não `await import`): o build do servidor usa um module
+// target sem suporte a top-level await, e o arquivo quebrava o tsc do
+// Docker. O vi.mock acima é içado pelo Vitest para antes dos imports, então
+// o mock continua valendo.
+import { companyStatusGuard } from "./company-status.middleware";
 
 function call(path: string, user?: { id: string; companyId: string; role: string }) {
   const req = { path, user } as Request;
