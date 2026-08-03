@@ -12,6 +12,16 @@ export default defineConfig({
   },
   build: {
     outDir: "dist/client",
+    // Sem isto, o Vite injetava <link rel="modulepreload"> do chunk do
+    // recharts no index.html — o navegador baixava os 160 KB gzip logo no
+    // primeiro acesso, anulando boa parte do ganho de tê-lo separado.
+    // Como recharts só aparece dentro de telas lazy (Acompanhamento/
+    // Recebíveis/Metas/Bases), esse preload é desperdício para quem abre
+    // só o login. Filtramos apenas ele: o preload dos demais chunks
+    // continua valendo, para a navegação interna seguir rápida.
+    modulePreload: {
+      resolveDependencies: (_url, deps) => deps.filter((dep) => !dep.includes("recharts")),
+    },
     rollupOptions: {
       output: {
         // Recharts em chunk próprio: é a maior dependência do front (~160
