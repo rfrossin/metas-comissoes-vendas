@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
 import { api } from "@/services/api";
+import { ErrorState } from "@/components/AsyncState";
 import { useAuthStore } from "@/store/auth.store";
 import { useScopedEntityOptions } from "@/pages/metas/useScopedEntityOptions";
 import { InlineNameForm } from "./InlineNameForm";
@@ -39,7 +40,12 @@ export function EstruturaOrganizacionalPage() {
   const [isAddingChannel, setIsAddingChannel] = useState(false);
   const [channelError, setChannelError] = useState<string | null>(null);
 
-  const { data: tree, isLoading } = useQuery({
+  const {
+    data: tree,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
     queryKey: ["org-tree"],
     queryFn: async () => {
       const { data } = await api.get<OrgTree>("/estrutura-organizacional/tree");
@@ -109,6 +115,9 @@ export function EstruturaOrganizacionalPage() {
       {activeTab === "estrutura" && (
         <>
           {isLoading && <p className="text-sm text-muted-foreground">Carregando estrutura organizacional...</p>}
+          {/* Sem isto, `tree` fica undefined num erro de rede e a estrutura
+              inteira some da tela sem nenhuma indicação de falha. */}
+          {isError && <ErrorState onRetry={() => refetch()} />}
 
           {tree && (
             <div className="rounded-lg border border-border bg-card p-4">

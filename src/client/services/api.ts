@@ -1,8 +1,13 @@
 import axios, { isAxiosError } from "axios";
 import { useAuthStore } from "@/store/auth.store";
 
+// timeout obrigatório: sem ele o axios usa 0 (infinito) e, em rede móvel
+// oscilante, o socket fica pendurado até o SO derrubá-lo — a query nunca
+// sai de isLoading e o usuário vê "Carregando..." para sempre, sem nenhum
+// caminho de código que a faça falhar.
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? "/api",
+  timeout: 30_000,
 });
 
 api.interceptors.request.use((config) => {

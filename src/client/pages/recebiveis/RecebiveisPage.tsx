@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
+import { ErrorState } from "@/components/AsyncState";
 import { useAuthStore } from "@/store/auth.store";
 import { EntityMultiPicker } from "@/pages/acompanhamento/EntityMultiPicker";
 import type { ScopeType } from "@/pages/bases-metas/ScopeSelector";
@@ -72,7 +73,7 @@ export function RecebiveisPage() {
     [entityType, entityIds, periodStart, periodEnd],
   );
 
-  const { data: overview, isLoading } = useRecebiveisOverview(filters);
+  const { data: overview, isLoading, isError, refetch } = useRecebiveisOverview(filters);
 
   const bases = useMemo(() => {
     if (!overview) return [];
@@ -143,6 +144,9 @@ export function RecebiveisPage() {
       )}
 
       {isLoading && entityIds.length > 0 && <p className="text-sm text-muted-foreground">Carregando...</p>}
+      {/* Sem isto, `overview` fica undefined num erro de rede e todo o
+          conteúdo abaixo (sob `{overview && ...}`) some sem explicação. */}
+      {isError && entityIds.length > 0 && <ErrorState onRetry={() => refetch()} />}
 
       {overview && (
         <div className="space-y-6">

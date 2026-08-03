@@ -5,6 +5,9 @@ import { usePlatformAuthStore } from "@/store/platform-auth.store";
 // Admin da plataforma), não o de useAuthStore (usuário de uma Company).
 export const platformApi = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? "/api",
+  // Mesma razão de api.ts: sem timeout, rede ruim trava a tela em
+  // "Carregando..." indefinidamente.
+  timeout: 30_000,
 });
 
 platformApi.interceptors.request.use((config) => {

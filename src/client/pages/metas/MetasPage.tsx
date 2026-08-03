@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
+import { ErrorState } from "@/components/AsyncState";
 import { useAuthStore } from "@/store/auth.store";
 import type { ResultType } from "@/pages/resultados/ResultTypesSection";
 import { Modal } from "@/pages/bases-recebiveis/Modal";
@@ -109,7 +110,12 @@ export function MetasPage() {
     );
   }
 
-  const { data: campaigns, isLoading } = useQuery({
+  const {
+    data: campaigns,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
     queryKey: ["goal-campaigns"],
     queryFn: async () => {
       const { data } = await api.get<GoalCampaign[]>("/metas");
@@ -341,7 +347,18 @@ export function MetasPage() {
                   </tr>
                 )}
 
-                {!isLoading && campaigns?.length === 0 && (
+                {/* Antes de qualquer "nenhum registro": com a API fora do
+                    ar, campaigns fica undefined e a condição de lista vazia
+                    nunca casava — a tabela ficava vazia sem explicar nada. */}
+                {isError && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-2">
+                      <ErrorState onRetry={() => refetch()} />
+                    </td>
+                  </tr>
+                )}
+
+                {!isLoading && !isError && campaigns?.length === 0 && (
                   <tr>
                     <td colSpan={5} className="px-3 py-2 text-muted-foreground">
                       Nenhuma campanha de meta cadastrada ainda.

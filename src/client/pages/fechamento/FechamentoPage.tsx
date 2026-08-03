@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/services/api";
+import { ErrorState } from "@/components/AsyncState";
 import { useAuthStore } from "@/store/auth.store";
 import { EntityMultiPicker } from "@/pages/acompanhamento/EntityMultiPicker";
 import type { ScopeType } from "@/pages/bases-metas/ScopeSelector";
@@ -112,7 +113,7 @@ export function FechamentoPage() {
   const isAdmin = role === "ADMINISTRADOR";
   const canManageClosings = role === "ADMINISTRADOR" || role === "LIDERANCA_NO";
   const canAccess = canManageClosings || role === "OPERACIONAL";
-  const { data: rows, isLoading } = useClosingsList(filters, canAccess && entityIds.length > 0);
+  const { data: rows, isLoading, isError, refetch } = useClosingsList(filters, canAccess && entityIds.length > 0);
 
   const { data: periods } = useCommercialPeriods();
   const setPeriodStatus = useSetCommercialPeriodStatus();
@@ -312,6 +313,10 @@ export function FechamentoPage() {
         </p>
       )}
       {isLoading && entityIds.length > 0 && <p className="text-sm text-muted-foreground">Carregando...</p>}
+      {/* Sem isto, um erro de rede deixava `rows` undefined: a tabela
+          inteira sumia da tela (está sob `{rows && ...}`), sem nenhuma
+          indicação de que algo falhou. */}
+      {isError && entityIds.length > 0 && <ErrorState onRetry={() => refetch()} />}
 
       {canManageClosings && rows && rows.some(isRowSelectable) && (
         <div className="flex flex-wrap items-center gap-3">

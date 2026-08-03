@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
+import { ErrorState } from "@/components/AsyncState";
 import { SeasonalityBaseForm, type EditingSeasonalityBase } from "./SeasonalityBaseForm";
 import type { ScopeType } from "./ScopeSelector";
 
@@ -43,7 +44,12 @@ export function BasesMetasPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [editingBase, setEditingBase] = useState<EditingSeasonalityBase | null>(null);
 
-  const { data: bases, isLoading } = useQuery({
+  const {
+    data: bases,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
     queryKey: ["seasonality-bases"],
     queryFn: async () => {
       const { data } = await api.get<SeasonalityBase[]>("/bases-metas");
@@ -109,7 +115,18 @@ export function BasesMetasPage() {
               </tr>
             )}
 
-            {!isLoading && bases?.length === 0 && (
+            {/* Antes de "nenhuma base": num erro de rede, `bases` fica
+                undefined e a condição de lista vazia nunca casa — a tabela
+                ficava vazia sem explicar nada ao usuário. */}
+            {isError && (
+              <tr>
+                <td colSpan={6} className="px-3 py-2">
+                  <ErrorState onRetry={() => refetch()} />
+                </td>
+              </tr>
+            )}
+
+            {!isLoading && !isError && bases?.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-3 py-2 text-muted-foreground">
                   Nenhuma base de sazonalidade cadastrada ainda.
