@@ -3,6 +3,10 @@ name: Deploy backend
 on:
   push:
     branches: [main]
+  # Permite redisparar o deploy manualmente (aba Actions ou `gh workflow
+  # run deploy.yml`) sem precisar de um commit vazio — útil quando o
+  # deploy falha por algo do servidor, não do código.
+  workflow_dispatch:
 
 jobs:
   deploy:
