@@ -2,7 +2,8 @@ import jwt from "jsonwebtoken";
 import { prisma } from "../config/prisma";
 import { supabaseAdmin, supabaseAuth } from "../config/supabase";
 import { env } from "../config/env";
-import { ConflictError, UnauthorizedError } from "../utils/http-errors";
+import { ConflictError, NotFoundError, UnauthorizedError } from "../utils/http-errors";
+import { acceptInvite } from "./permissoes.service";
 
 // Terceiro escopo de token do sistema, ao lado de "platform"
 // (platform-auth.service.ts) e do token de tenant (auth.service.ts).
@@ -127,6 +128,95 @@ export async function getIdentityState(authUserId: string): Promise<{
       role: u.role,
     })),
   };
+}
+
+// Troca um token de TENANT válido por um de IDENTIDADE, sem pedir a senha
+// de novo. Existe para o item "Entrar em outra empresa" do menu do header:
+// quem já está logado numa empresa não deveria ter de deslogar só para
+// acessar o painel de conta e pedir entrada em outra.
+//
+// Seguro porque parte de uma sessão já autenticada: o userId vem do token
+// de tenant (validado pelo authMiddleware), e daqui só se extrai o
+// authUserId correspondente — nenhuma escalada de privilégio, já que o
+// escopo "identity" dá menos acesso que o de tenant, não mais.
+export async function issueIdentityTokenForUser(userId: string): Promise<{ token: string; email: string }> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { authUserId: true, email: true },
+  });
+  if (!user?.authUserId) {
+    throw new UnauthorizedError("Este usuário não tem identidade vinculada.");
+  }
+  return { token: signIdentityToken(user.authUserId, user.email), email: user.email };
+}
+
+// Convites PENDENTES dirigidos ao e-mail desta identidade — o lado do
+// convidado (listPendingInvites em permissoes.service.ts é o lado do
+// Admin, que vê os convites que a empresa dele emitiu).
+//
+// Existe para o convite não depender só do link do e-mail: se ele se
+// perdeu na caixa de spam, o convite continua acessível dentro do painel.
+export async function listMyPendingInvites(authUserId: string) {
+  const { data, error } = await supabaseAdmin.auth.admin.getUserById(authUserId);
+  if (error || !data.user?.email) return [];
+
+  const invites = await prisma.invite.findMany({
+    where: {
+      // insensitive: o e-mail do convite é digitado à mão pelo Admin e
+      // pode divergir no caixa ("Rossin@" vs "rossin@") — sem isto o
+      // convidado simplesmente não veria o próprio convite.
+      email: { equals: data.user.email, mode: "insensitive" },
+      status: "PENDENTE",
+      expiresAt: { gt: new Date() },
+    },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      token: true,
+      expiresAt: true,
+      company: { select: { name: true } },
+      cargo: { select: { name: true } },
+    },
+  });
+
+  return invites.map((invite) => ({
+    id: invite.id,
+    token: invite.token,
+    companyName: invite.company.name,
+    cargoName: invite.cargo?.name ?? null,
+    expiresAt: invite.expiresAt,
+  }));
+}
+
+// Aceite de convite DE DENTRO do painel, por quem já está autenticado.
+//
+// Diferente de acceptInvite (rota pública): lá a identidade é provada pelo
+// link do e-mail e a pessoa precisa definir/confirmar senha. Aqui ela já
+// provou quem é pelo token de identidade, então basta validar que o
+// convite é mesmo para o e-mail dela — o que impede alguém de aceitar um
+// convite alheio de posse do token.
+export async function acceptInviteAsIdentity(authUserId: string, inviteToken: string) {
+  const { data, error } = await supabaseAdmin.auth.admin.getUserById(authUserId);
+  if (error || !data.user?.email) {
+    throw new UnauthorizedError("Sessão inválida. Faça login novamente.");
+  }
+
+  const invite = await prisma.invite.findUnique({
+    where: { token: inviteToken },
+    select: { email: true },
+  });
+  if (!invite) {
+    throw new NotFoundError("Convite inválido ou já utilizado.");
+  }
+  if (invite.email.toLowerCase() !== data.user.email.toLowerCase()) {
+    // Mesma mensagem de "não encontrado": revelar que o convite existe,
+    // mas é de outra pessoa, já é informação a mais.
+    throw new NotFoundError("Convite inválido ou já utilizado.");
+  }
+
+  // Daqui em diante é exatamente o mesmo caminho do aceite público —
+  // incluindo papel derivado do Cargo e reativação de quem já saiu.
+  return acceptInvite(inviteToken, authUserId);
 }
 
 // Login de identidade: mesma credencial do login normal, mas devolve um

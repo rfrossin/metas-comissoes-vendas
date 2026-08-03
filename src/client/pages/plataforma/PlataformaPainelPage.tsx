@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { platformApi, getPlatformErrorMessage } from "@/services/platform-api";
 import { usePlatformAuthStore } from "@/store/platform-auth.store";
 import { UsuariosSemEmpresaSection } from "./UsuariosSemEmpresaSection";
+import { VincularUsuarioSection } from "./VincularUsuarioSection";
+import { GerenciarEmpresaCard } from "./GerenciarEmpresaCard";
 
 interface CompanySignupRequest {
   id: string;
@@ -21,6 +23,9 @@ interface CompanyUser {
   // createdAt = entrada na empresa; leftAt = saída (null se ainda está lá).
   createdAt: string;
   leftAt: string | null;
+  // Identidade Supabase — usada para oferecer a pessoa no seletor de
+  // "adicionar usuário a uma empresa".
+  authUserId: string | null;
   member: { fullName: string } | null;
 }
 
@@ -51,6 +56,8 @@ export function PlataformaPainelPage() {
   const [requests, setRequests] = useState<CompanySignupRequest[]>([]);
   const [companies, setCompanies] = useState<CompanyWithUsers[]>([]);
   const [platformUsers, setPlatformUsers] = useState<PlatformUserRow[]>([]);
+  // Identidades sem empresa — alimentam o seletor de "vincular usuario".
+  const [orphans, setOrphans] = useState<{ authUserId: string; email: string }[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -69,14 +76,16 @@ export function PlataformaPainelPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const [requestsRes, companiesRes, platformUsersRes] = await Promise.all([
+      const [requestsRes, companiesRes, platformUsersRes, orphansRes] = await Promise.all([
         platformApi.get<CompanySignupRequest[]>("/plataforma/pedidos-empresa", { params: { status: "PENDENTE" } }),
         platformApi.get<CompanyWithUsers[]>("/plataforma/empresas"),
         platformApi.get<PlatformUserRow[]>("/plataforma/usuarios"),
+        platformApi.get<{ authUserId: string; email: string }[]>("/plataforma/usuarios-sem-empresa"),
       ]);
       setRequests(requestsRes.data);
       setCompanies(companiesRes.data);
       setPlatformUsers(platformUsersRes.data);
+      setOrphans(orphansRes.data);
     } catch (err) {
       setError(getPlatformErrorMessage(err, "Não foi possível carregar os dados."));
     } finally {
@@ -274,6 +283,24 @@ export function PlataformaPainelPage() {
 
         <UsuariosSemEmpresaSection />
 
+        {/* Identidades conhecidas = as já vinculadas a alguma empresa MAIS
+            as órfãs (que são justamente as que mais precisam ser
+            vinculadas). Deduplicadas por authUserId: quem está em duas
+            empresas apareceria repetido. */}
+        <VincularUsuarioSection
+          companies={companies.map((c) => ({ id: c.id, name: c.name }))}
+          identities={Array.from(
+            new Map([
+              ...companies
+                .flatMap((c) => c.users)
+                .filter((u) => u.authUserId)
+                .map((u) => [u.authUserId as string, { authUserId: u.authUserId as string, email: u.email }] as const),
+              ...orphans.map((o) => [o.authUserId, { authUserId: o.authUserId, email: o.email }] as const),
+            ]).values(),
+          ).sort((a, b) => a.email.localeCompare(b.email))}
+          onLinked={() => void loadAll()}
+        />
+
         <section className="space-y-3">
           <h2 className="text-lg font-semibold text-foreground">Empresas e usuários</h2>
 
@@ -286,7 +313,15 @@ export function PlataformaPainelPage() {
               <div key={company.id} className="rounded-lg border border-border bg-card p-4">
                 <div className="flex items-center justify-between">
                   <p className="font-medium text-foreground">{company.name}</p>
-                  <span className="text-xs text-muted-foreground">{company.status}</span>
+                  <span
+                    className={
+                      company.status === "ATIVA"
+                        ? "text-xs text-muted-foreground"
+                        : "rounded-md bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive"
+                    }
+                  >
+                    {company.status === "ATIVA" ? "Ativa" : "Acesso pausado"}
+                  </span>
                 </div>
 
                 {company.users.length === 0 ? (
@@ -351,6 +386,11 @@ export function PlataformaPainelPage() {
                     </tbody>
                   </table>
                 )}
+
+                <GerenciarEmpresaCard
+                  company={{ id: company.id, name: company.name, status: company.status }}
+                  onChanged={() => void loadAll()}
+                />
               </div>
             ))}
           </div>

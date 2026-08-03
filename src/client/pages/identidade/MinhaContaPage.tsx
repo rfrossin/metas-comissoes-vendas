@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { identityApi } from "@/services/identity-api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { identityApi, getIdentityErrorMessage } from "@/services/identity-api";
 import { useIdentityStore } from "@/store/identity.store";
 import { useAuthStore, PERMISSION_LEVEL_LABELS, type PermissionLevel } from "@/store/auth.store";
 import { ErrorState, LoadingState } from "@/components/AsyncState";
@@ -15,6 +15,22 @@ interface IdentityState {
   companies: { companyId: string; companyName: string; role: PermissionLevel }[];
 }
 
+interface PendingInvite {
+  id: string;
+  token: string;
+  companyName: string;
+  cargoName: string | null;
+  expiresAt: string;
+}
+
+interface MyAccessRequest {
+  id: string;
+  companyName: string;
+  status: "PENDENTE" | "APROVADO" | "REJEITADO";
+  createdAt: string;
+  rejectionReason: string | null;
+}
+
 // Painel de quem está autenticado mas (normalmente) ainda não pertence a
 // nenhuma empresa. É o destino do login com status NO_COMPANY e o único
 // lugar de onde se pede acesso a uma empresa ou se cadastra uma nova.
@@ -22,11 +38,38 @@ export function MinhaContaPage() {
   const navigate = useNavigate();
   const clearIdentity = useIdentityStore((state) => state.clearIdentity);
   const identityEmail = useIdentityStore((state) => state.email);
+  const queryClient = useQueryClient();
   const [dialog, setDialog] = useState<"acesso" | "empresa" | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const { data, isLoading, isError, refetch } = useQuery<IdentityState>({
     queryKey: ["identidade", "eu"],
     queryFn: async () => (await identityApi.get<IdentityState>("/identidade/eu")).data,
+  });
+
+  // Convites que um Admin enviou para este e-mail. Ficam aqui para o
+  // convite não depender só do link do e-mail (que se perde no spam).
+  const invitesQuery = useQuery<PendingInvite[]>({
+    queryKey: ["identidade", "meus-convites"],
+    queryFn: async () => (await identityApi.get<PendingInvite[]>("/identidade/meus-convites")).data,
+  });
+
+  // Pedidos de acesso já enviados, para a pessoa acompanhar sem precisar
+  // perguntar ao Admin se chegou.
+  const requestsQuery = useQuery<MyAccessRequest[]>({
+    queryKey: ["identidade", "meus-pedidos"],
+    queryFn: async () => (await identityApi.get<MyAccessRequest[]>("/identidade/meus-pedidos")).data,
+  });
+
+  const acceptInviteMutation = useMutation({
+    mutationFn: (token: string) => identityApi.post("/identidade/aceitar-convite", { token }),
+    onSuccess: () => {
+      setActionError(null);
+      // A empresa recém-aceita precisa aparecer na lista, e o convite sair.
+      queryClient.invalidateQueries({ queryKey: ["identidade"] });
+    },
+    onError: (error: unknown) =>
+      setActionError(getIdentityErrorMessage(error, "Não foi possível aceitar o convite.")),
   });
 
   function handleLogout() {
@@ -63,6 +106,47 @@ export function MinhaContaPage() {
 
         {isLoading && <LoadingState />}
         {isError && <ErrorState onRetry={() => refetch()} />}
+
+        {actionError && <p className="text-sm text-destructive">{actionError}</p>}
+
+        {/* Convites recebidos — primeiro por ser a ação mais imediata:
+            alguém já liberou a entrada, basta confirmar. */}
+        {invitesQuery.data && invitesQuery.data.length > 0 && (
+          <section className="space-y-3 rounded-lg border border-primary/40 bg-card p-6">
+            <div>
+              <h2 className="text-lg font-medium text-foreground">
+                Convites recebidos ({invitesQuery.data.length})
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Você foi convidado a participar {invitesQuery.data.length > 1 ? "destas empresas" : "desta empresa"}.
+                Aceitar vincula a empresa à sua conta imediatamente.
+              </p>
+            </div>
+
+            {invitesQuery.data.map((invite) => (
+              <div
+                key={invite.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-input px-3 py-2"
+              >
+                <div>
+                  <p className="text-sm font-medium text-foreground">{invite.companyName}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {invite.cargoName ? `Cargo: ${invite.cargoName} · ` : ""}
+                    Expira em {new Date(invite.expiresAt).toLocaleDateString("pt-BR")}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={acceptInviteMutation.isPending}
+                  onClick={() => acceptInviteMutation.mutate(invite.token)}
+                  className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                >
+                  {acceptInviteMutation.isPending ? "Aceitando..." : "Aceitar convite"}
+                </button>
+              </div>
+            ))}
+          </section>
+        )}
 
         {data && (
           <>
@@ -139,6 +223,43 @@ export function MinhaContaPage() {
               </section>
             )}
           </>
+        )}
+
+        {/* Acompanhamento dos pedidos já enviados — sem isto a pessoa não
+            tem como saber se o pedido chegou, e reenvia (tomando 409). */}
+        {requestsQuery.data && requestsQuery.data.length > 0 && (
+          <section className="space-y-2 rounded-lg border border-border bg-card p-6">
+            <h2 className="text-lg font-medium text-foreground">Meus pedidos de acesso</h2>
+            {requestsQuery.data.map((request) => (
+              <div
+                key={request.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-input px-3 py-2"
+              >
+                <div>
+                  <p className="text-sm text-foreground">{request.companyName}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Enviado em {new Date(request.createdAt).toLocaleDateString("pt-BR")}
+                    {request.rejectionReason ? ` · Motivo: ${request.rejectionReason}` : ""}
+                  </p>
+                </div>
+                <span
+                  className={
+                    request.status === "APROVADO"
+                      ? "text-xs font-medium text-success"
+                      : request.status === "REJEITADO"
+                        ? "text-xs font-medium text-destructive"
+                        : "text-xs font-medium text-muted-foreground"
+                  }
+                >
+                  {request.status === "PENDENTE"
+                    ? "Aguardando aprovação"
+                    : request.status === "APROVADO"
+                      ? "Aprovado"
+                      : "Recusado"}
+                </span>
+              </div>
+            ))}
+          </section>
         )}
 
         {dialog === "acesso" && <SolicitarAcessoDialog onClose={() => setDialog(null)} />}

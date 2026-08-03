@@ -7,6 +7,7 @@ import { platformRoutes } from "./routes/platform.routes";
 import { identityRoutes } from "./routes/identity.routes";
 import { authMiddleware } from "./middlewares/auth.middleware";
 import { tenantMiddleware } from "./middlewares/tenant.middleware";
+import { companyStatusGuard } from "./middlewares/company-status.middleware";
 import { errorMiddleware } from "./middlewares/error.middleware";
 import { env } from "./config/env";
 
@@ -41,6 +42,9 @@ app.use("/api/plataforma", platformRoutes);
 // app.use("/api", authMiddleware, ...) abaixo — aquele middleware exige
 // token de tenant e rejeitaria estas rotas com 401.
 app.use("/api/identidade", identityRoutes);
-app.use("/api", authMiddleware, tenantMiddleware, routes);
+// companyStatusGuard depois do tenantMiddleware: só então req.user.companyId
+// é confiável. Bloqueia operar dentro de uma empresa pausada pelo Super
+// Admin, sem impedir o login nem o acesso às outras empresas da pessoa.
+app.use("/api", authMiddleware, tenantMiddleware, companyStatusGuard, routes);
 
 app.use(errorMiddleware);

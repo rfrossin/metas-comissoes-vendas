@@ -8,10 +8,14 @@ import {
   submitCompanySignupRequest,
 } from "../services/company-signup.service";
 import {
+  deleteCompanyPermanently,
+  getCompanyName,
   listCompaniesWithUsers,
   listOrphanIdentities,
+  platformAddUserToCompany,
   platformDeleteIdentity,
   platformRemoveUserFromCompany,
+  setCompanyStatus,
 } from "../services/platform-companies.service";
 import { getIdentityState } from "../services/identity.service";
 import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from "../utils/http-errors";
@@ -165,6 +169,69 @@ export async function platformDeleteIdentityHandler(req: Request, res: Response)
   try {
     await platformDeleteIdentity(req.platformUser!, req.params.authUserId);
     res.status(204).send();
+  } catch (error) {
+    respondToError(error, res);
+  }
+}
+
+const companyStatusSchema = z.object({
+  status: z.enum(["ATIVA", "BLOQUEADA_INADIMPLENCIA"]),
+});
+
+// Pausa/reativa o acesso à empresa. Login continua funcionando; o que para
+// é operar dentro dela (companyStatusGuard).
+export async function setCompanyStatusHandler(req: Request, res: Response) {
+  const parsed = companyStatusSchema.safeParse(req.body);
+  if (!parsed.success) return badRequest(res);
+
+  try {
+    res.json(await setCompanyStatus(req.platformUser!, req.params.id, parsed.data.status));
+  } catch (error) {
+    respondToError(error, res);
+  }
+}
+
+const deleteCompanySchema = z.object({
+  // Confirmação por digitação do nome: esta ação apaga o histórico
+  // financeiro inteiro da empresa e não tem desfazer. Um clique errado na
+  // lista não pode bastar.
+  confirmName: z.string().min(1),
+});
+
+export async function deleteCompanyHandler(req: Request, res: Response) {
+  const parsed = deleteCompanySchema.safeParse(req.body);
+  if (!parsed.success) return badRequest(res, "Confirme digitando o nome da empresa.");
+
+  try {
+    const company = await getCompanyName(req.params.id);
+    if (!company) {
+      res.status(404).json({ message: "Empresa não encontrada." });
+      return;
+    }
+    if (parsed.data.confirmName.trim() !== company.name) {
+      res.status(400).json({ message: "O nome digitado não confere com o da empresa." });
+      return;
+    }
+
+    res.json(await deleteCompanyPermanently(req.platformUser!, req.params.id));
+  } catch (error) {
+    respondToError(error, res);
+  }
+}
+
+const addUserToCompanySchema = z.object({
+  authUserId: z.string().min(1),
+  companyId: z.string().min(1),
+  role: z.enum(["OPERACIONAL", "LIDERANCA_NO", "ADMINISTRADOR"]),
+});
+
+// Vincula uma identidade existente a uma empresa, sem passar por convite.
+export async function platformAddUserToCompanyHandler(req: Request, res: Response) {
+  const parsed = addUserToCompanySchema.safeParse(req.body);
+  if (!parsed.success) return badRequest(res);
+
+  try {
+    res.status(201).json(await platformAddUserToCompany(req.platformUser!, parsed.data));
   } catch (error) {
     respondToError(error, res);
   }

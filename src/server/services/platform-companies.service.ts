@@ -1,8 +1,9 @@
 import { prisma } from "../config/prisma";
 import { prismaAdmin } from "../config/prisma-admin";
 import { supabaseAdmin } from "../config/supabase";
-import { ForbiddenError, NotFoundError } from "../utils/http-errors";
+import { ConflictError, ForbiddenError, NotFoundError } from "../utils/http-errors";
 import { removeMembershipFromIdentity } from "./company-access.service";
+import { addMembershipToIdentity } from "./permissoes.service";
 
 // Visão do Super Admin sobre todas as empresas e seus usuários — só
 // leitura, sem qualquer isolamento por companyId (o próprio ponto desta
@@ -138,6 +139,156 @@ export async function platformRemoveUserFromCompany(
   if (user.authUserId) {
     await removeMembershipFromIdentity(user.authUserId, user.companyId);
   }
+}
+
+// Pausa (ou reativa) o acesso à empresa. Os usuários continuam logando —
+// a identidade deles e as outras empresas em que participam seguem
+// intactas —, mas nada de operar DENTRO desta: o companyStatusGuard barra
+// metas, recebíveis, resultados e fechamento enquanto o status não for
+// ATIVA.
+export async function setCompanyStatus(
+  platformUser: { role: "SUPER_ADMIN" | "SUPORTE" },
+  companyId: string,
+  status: "ATIVA" | "BLOQUEADA_INADIMPLENCIA",
+) {
+  assertSuperAdmin(platformUser);
+
+  const company = await prisma.company.findUnique({ where: { id: companyId }, select: { id: true } });
+  if (!company) throw new NotFoundError("Empresa não encontrada.");
+
+  return prismaAdmin.company.update({
+    where: { id: companyId },
+    data: { status },
+    select: { id: true, name: true, status: true },
+  });
+}
+
+// Usado pelo controller para conferir a confirmação digitada antes de
+// excluir — comparar o nome no backend evita depender do que o cliente diz
+// que a empresa se chama.
+export async function getCompanyName(companyId: string) {
+  return prisma.company.findUnique({ where: { id: companyId }, select: { name: true } });
+}
+
+// EXCLUSÃO DEFINITIVA da empresa e de tudo que pertence a ela.
+//
+// Irreversível: apaga metas, resultados, recebíveis, fechamentos e o
+// histórico financeiro inteiro. O controller exige que o Super Admin
+// digite o nome da empresa para confirmar — sem isso, um clique errado na
+// lista destrói dados sem volta.
+//
+// A ordem de exclusão é resolvida pelo Postgres (TRUNCATE ... CASCADE não
+// serve aqui, pois apagaria as linhas de TODAS as empresas): usamos DELETE
+// com CASCADE nas FKs via ordem topológica derivada do próprio banco, em
+// vez de uma lista fixa de 30+ tabelas que sairia de sincronia a cada
+// tabela nova.
+export async function deleteCompanyPermanently(
+  platformUser: { role: "SUPER_ADMIN" | "SUPORTE" },
+  companyId: string,
+) {
+  assertSuperAdmin(platformUser);
+
+  const company = await prisma.company.findUnique({
+    where: { id: companyId },
+    select: { id: true, name: true, users: { select: { authUserId: true } } },
+  });
+  if (!company) throw new NotFoundError("Empresa não encontrada.");
+
+  // Tabelas com companyId, descobertas no catálogo do Postgres — assim uma
+  // tabela nova entra automaticamente, sem alguém precisar lembrar de
+  // atualizar uma lista aqui.
+  const tables = await prismaAdmin.$queryRaw<{ table_name: string }[]>`
+    SELECT c.relname AS table_name
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE a.attname = 'companyId'
+      AND c.relkind = 'r'
+      AND n.nspname = 'public'
+      AND NOT a.attisdropped
+  `;
+
+  await prismaAdmin.$transaction(async (tx) => {
+    // session_replication_role = replica desliga a checagem de FK durante
+    // esta transação. É o que permite apagar as tabelas em qualquer ordem
+    // sem violar dependências — e, como tudo que sai pertence à mesma
+    // empresa, não há risco de deixar referência órfã de outro tenant.
+    await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = 'replica'`);
+
+    for (const { table_name } of tables) {
+      await tx.$executeRawUnsafe(`DELETE FROM "${table_name}" WHERE "companyId" = $1`, companyId);
+    }
+
+    await tx.$executeRawUnsafe(`DELETE FROM "companies" WHERE "id" = $1`, companyId);
+  });
+
+  // Limpa a membership desta empresa no app_metadata de cada identidade —
+  // sem isso o login continuaria oferecendo uma empresa que não existe.
+  await Promise.all(
+    company.users
+      .map((u) => u.authUserId)
+      .filter((id): id is string => Boolean(id))
+      .map((authUserId) => removeMembershipFromIdentity(authUserId, companyId).catch(() => undefined)),
+  );
+
+  return { name: company.name, tablesCleared: tables.length };
+}
+
+// Vincula uma identidade JÁ EXISTENTE a uma empresa, direto pelo painel da
+// plataforma — atalho de gestão para quando o Admin da empresa não está
+// disponível. Não dispara convite nem e-mail: o acesso passa a valer no
+// próximo login.
+export async function platformAddUserToCompany(
+  platformUser: { role: "SUPER_ADMIN" | "SUPORTE" },
+  input: { authUserId: string; companyId: string; role: "OPERACIONAL" | "LIDERANCA_NO" | "ADMINISTRADOR" },
+) {
+  assertSuperAdmin(platformUser);
+
+  const company = await prisma.company.findUnique({
+    where: { id: input.companyId },
+    select: { id: true, name: true },
+  });
+  if (!company) throw new NotFoundError("Empresa não encontrada.");
+
+  const { data, error } = await supabaseAdmin.auth.admin.getUserById(input.authUserId);
+  if (error || !data.user?.email) {
+    throw new NotFoundError("Usuário não encontrado.");
+  }
+  const email = data.user.email;
+
+  // Quem já esteve na empresa tem linha com leftAt preenchido: reativar
+  // respeita a unique (authUserId, companyId), que um create violaria.
+  const previous = await prisma.user.findFirst({
+    where: { authUserId: input.authUserId, companyId: input.companyId },
+    select: { id: true, leftAt: true },
+  });
+
+  if (previous && !previous.leftAt) {
+    throw new ConflictError("Este usuário já faz parte desta empresa.");
+  }
+
+  const user = previous
+    ? await prismaAdmin.user.update({
+        where: { id: previous.id },
+        data: { leftAt: null, isActive: true, role: input.role, email },
+      })
+    : await prismaAdmin.user.create({
+        data: {
+          companyId: input.companyId,
+          email,
+          passwordHash: "",
+          authUserId: input.authUserId,
+          role: input.role,
+        },
+      });
+
+  await addMembershipToIdentity(input.authUserId, {
+    userId: user.id,
+    companyId: input.companyId,
+    role: user.role,
+  });
+
+  return { userId: user.id, companyName: company.name, email };
 }
 
 // Exclui a IDENTIDADE inteira (Supabase Auth) e encerra todos os vínculos.

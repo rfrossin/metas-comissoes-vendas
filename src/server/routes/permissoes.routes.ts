@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   adminSetUserEmailHandler,
+  issueIdentityTokenHandler,
   cancelInviteHandler,
   createInviteHandler,
   changeMyPasswordHandler,
@@ -48,6 +49,9 @@ permissoesRoutes.get("/minhas-atribuicoes", asyncHandler(getMyScopeAssignmentsHa
 permissoesRoutes.put("/minha-senha", asyncHandler(changeMyPasswordHandler));
 permissoesRoutes.get("/minhas-empresas", asyncHandler(myCompaniesHandler));
 permissoesRoutes.post("/trocar-empresa", asyncHandler(switchCompanyHandler));
+// Troca a sessao de tenant por um token de identidade, para abrir o painel
+// de conta ("Entrar em outra empresa") sem exigir novo login.
+permissoesRoutes.post("/token-identidade", asyncHandler(issueIdentityTokenHandler));
 
 // Código de convite da empresa e pedidos de acesso feitos com ele. Todos
 // exigem ADMINISTRADOR — a checagem fica no serviço (assertAdmin), como no

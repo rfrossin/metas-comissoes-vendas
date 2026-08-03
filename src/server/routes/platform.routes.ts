@@ -4,7 +4,10 @@ import {
   createPlatformUserHandler,
   listCompaniesWithUsersHandler,
   listCompanySignupRequestsHandler,
+  deleteCompanyHandler,
   listOrphanIdentitiesHandler,
+  platformAddUserToCompanyHandler,
+  setCompanyStatusHandler,
   listPlatformUsersHandler,
   platformDeleteIdentityHandler,
   platformLoginHandler,
@@ -35,3 +38,9 @@ platformRoutes.post("/usuarios", asyncHandler(createPlatformUserHandler));
 platformRoutes.get("/usuarios-sem-empresa", asyncHandler(listOrphanIdentitiesHandler));
 platformRoutes.delete("/vinculos/:userId", asyncHandler(platformRemoveUserFromCompanyHandler));
 platformRoutes.delete("/identidades/:authUserId", asyncHandler(platformDeleteIdentityHandler));
+
+// Gestão de empresas: pausar/reativar acesso, excluir definitivamente e
+// vincular um usuário existente a uma empresa.
+platformRoutes.patch("/empresas/:id/status", asyncHandler(setCompanyStatusHandler));
+platformRoutes.delete("/empresas/:id", asyncHandler(deleteCompanyHandler));
+platformRoutes.post("/vinculos", asyncHandler(platformAddUserToCompanyHandler));

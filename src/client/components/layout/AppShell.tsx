@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { CommandPalette } from "./CommandPalette";
 import { Header } from "./Header";
+import { CompanyBlockedBanner } from "./CompanyBlockedBanner";
 import { Sidebar } from "./Sidebar";
 
 const SIDEBAR_COLLAPSED_KEY = "metas-comissoes:sidebar-collapsed";
@@ -73,6 +74,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           onOpenMobileNav={() => setMobileNavOpen(true)}
           onOpenSearch={() => setSearchOpen(true)}
         />
+        <CompanyBlockedBanner />
         {/* Container flexível, não-opinativo: a densidade/grid de cada
             macroambiente é composta pela própria página (space-y-6 + grid/flex
             interno, ver DESIGN.md > Layout) — o shell só garante que ela tenha

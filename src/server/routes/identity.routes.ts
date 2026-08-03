@@ -1,5 +1,10 @@
 import { Router } from "express";
-import { getIdentityStateHandler, signUpIdentityHandler } from "../controllers/identity.controller";
+import {
+  acceptInviteAsIdentityHandler,
+  getIdentityStateHandler,
+  listMyPendingInvitesHandler,
+  signUpIdentityHandler,
+} from "../controllers/identity.controller";
 import {
   listMyAccessRequestsHandler,
   peekCompanyHandler,
@@ -26,6 +31,11 @@ identityRoutes.get("/eu", asyncHandler(getIdentityStateHandler));
 identityRoutes.get("/empresa", asyncHandler(peekCompanyHandler));
 identityRoutes.post("/solicitar-acesso", asyncHandler(requestCompanyAccessHandler));
 identityRoutes.get("/meus-pedidos", asyncHandler(listMyAccessRequestsHandler));
+
+// Convites que um Admin enviou para o e-mail desta identidade, e o aceite
+// direto pelo painel (sem passar pela tela de senha do link de e-mail).
+identityRoutes.get("/meus-convites", asyncHandler(listMyPendingInvitesHandler));
+identityRoutes.post("/aceitar-convite", asyncHandler(acceptInviteAsIdentityHandler));
 
 // Cadastrar uma empresa nova estando logado — substitui o botão "Nova
 // Empresa" da tela de login (ver company-signup.service.ts).

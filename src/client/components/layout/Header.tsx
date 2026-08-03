@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Building2, ChevronDown, LogOut, Menu, PanelLeft, PanelLeftClose, Search } from "lucide-react";
 import { api, getErrorMessage } from "@/services/api";
 import { PERMISSION_LEVEL_LABELS, useAuthStore, type AuthUser, type CompanyMembership } from "@/store/auth.store";
+import { useIdentityStore } from "@/store/identity.store";
 import { useNotifications } from "./useNotifications";
 
 interface MyProfile {
@@ -87,6 +88,22 @@ export function Header({
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  // Abre o painel de conta (entrar em outra empresa / cadastrar nova /
+  // aceitar convites). Aquelas rotas exigem token de IDENTIDADE, que a
+  // sessão de tenant não tem — o backend troca um pelo outro a partir da
+  // sessão já autenticada, evitando um logout/login só para isso.
+  async function handleGoToAccount() {
+    setCompanySwitchError(null);
+    try {
+      const { data } = await api.post<{ token: string; email: string }>("/permissoes/token-identidade");
+      useIdentityStore.getState().setIdentity(data.token, data.email);
+      setUserMenuOpen(false);
+      navigate("/minha-conta");
+    } catch (err) {
+      setCompanySwitchError(getErrorMessage(err, "Não foi possível abrir sua conta."));
+    }
+  }
 
   function handleLogout() {
     clearSession();
@@ -189,10 +206,16 @@ export function Header({
                 {user?.role && <p className="text-xs text-muted-foreground">{PERMISSION_LEVEL_LABELS[user.role]}</p>}
               </div>
 
-              {myCompanies && myCompanies.length > 1 && (
+              {/* A seção aparece SEMPRE que há empresas, não só com mais de
+                  uma: com uma só, ela mostra onde a pessoa está e dá acesso
+                  a "Entrar em outra empresa" — antes, quem tinha uma
+                  empresa não via nem indício de que dava para ter outras. */}
+              {myCompanies && myCompanies.length > 0 && (
                 <>
                   <div className="my-1 border-t border-border" />
-                  <p className="px-2 py-1 text-xs font-medium text-muted-foreground">Trocar de empresa</p>
+                  <p className="px-2 py-1 text-xs font-medium text-muted-foreground">
+                    {myCompanies.length > 1 ? "Trocar de empresa" : "Empresa atual"}
+                  </p>
                   {companySwitchError && (
                     <p className="px-2 pb-1 text-xs text-destructive">{companySwitchError}</p>
                   )}
@@ -210,6 +233,20 @@ export function Header({
                   ))}
                 </>
               )}
+
+              <div className="my-1 border-t border-border" />
+              {/* Leva ao painel de identidade, onde ficam os caminhos de
+                  entrar em outra empresa, cadastrar uma nova e aceitar
+                  convites. Exige um token de identidade, que só o login
+                  emite — por isso passa pela tela de login. */}
+              <button
+                type="button"
+                onClick={handleGoToAccount}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-foreground hover:bg-secondary/50"
+              >
+                <Building2 className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                Entrar em outra empresa
+              </button>
 
               <div className="my-1 border-t border-border" />
               <button

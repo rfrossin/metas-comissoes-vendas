@@ -21,6 +21,7 @@ import {
   updateUserRole,
 } from "../services/permissoes.service";
 import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from "../utils/http-errors";
+import { issueIdentityTokenForUser } from "../services/identity.service";
 
 const scopeTypeSchema = z.enum(["EMPRESA", "CANAL", "DEPARTAMENTO", "TIME", "MEMBRO"]);
 const accessLevelSchema = z.enum(["VISUALIZAR", "EDITAR"]);
@@ -156,6 +157,10 @@ export async function acceptInviteHandler(req: Request, res: Response) {
   } catch (error) {
     respondToError(error, res);
   }
+}
+
+export async function issueIdentityTokenHandler(req: Request, res: Response) {
+  res.json(await issueIdentityTokenForUser(req.user!.id));
 }
 
 export async function setUserActiveHandler(req: Request, res: Response) {

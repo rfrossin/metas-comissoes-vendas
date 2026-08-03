@@ -69,6 +69,13 @@ model Company {
 
 enum CompanyStatus {
   ATIVA
+  // Acesso pausado pelo Super Admin. Os usuários continuam conseguindo
+  // FAZER LOGIN (a identidade e as outras empresas deles seguem valendo);
+  // o que fica bloqueado é operar dentro desta empresa — ver/editar metas,
+  // recebíveis, resultados, fechamento. Implementado no companyStatusGuard
+  // (middlewares/company-status.middleware.ts), que roda depois do
+  // tenantMiddleware e barra tudo sob /api exceto um punhado de rotas de
+  // conta (perfil, trocar de empresa, sair).
   BLOQUEADA_INADIMPLENCIA
 }
 
