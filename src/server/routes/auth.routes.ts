@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { chooseCompanyHandler, loginHandler } from "../controllers/auth.controller";
-import { acceptInviteHandler } from "../controllers/permissoes.controller";
+import { acceptInviteHandler, getInvitePublicInfoHandler } from "../controllers/permissoes.controller";
 import { submitCompanySignupRequestHandler } from "../controllers/platform.controller";
 import { authRateLimiter } from "../middlewares/rate-limit.middleware";
 import { asyncHandler } from "../utils/async-handler";
@@ -15,6 +15,13 @@ authRoutes.post("/escolher-empresa", authRateLimiter, asyncHandler(chooseCompany
 // Pública (o convidado ainda não tem conta/token) — por isso vive aqui e
 // não em permissoes.routes.ts, que é montado atrás do authMiddleware.
 authRoutes.post("/aceitar-convite", asyncHandler(acceptInviteHandler));
-// Pública — botão "Nova Empresa" na tela de login. Só registra o pedido de
-// liberação; a Company real só existe após aprovação do Super Admin.
-authRoutes.post("/cadastrar-empresa", asyncHandler(submitCompanySignupRequestHandler));
+// Consultada pela tela de aceite antes de renderizar o formulário: decide
+// entre pedir senha nova ou a senha já existente da pessoa.
+authRoutes.get("/convite/:token", asyncHandler(getInvitePublicInfoHandler));
+// LEGADO — nenhuma tela chama mais. O fluxo atual é
+// POST /api/identidade/cadastrar-empresa, feito por quem já está logado, o
+// que permite vincular a empresa ao solicitante como Administrador já na
+// aprovação. Mantida para não quebrar pedidos em trânsito e integrações
+// externas; a aprovação desses pedidos (sem requesterAuthUserId) segue
+// pelo caminho de convite por e-mail em company-signup.service.ts.
+authRoutes.post("/cadastrar-empresa", authRateLimiter, asyncHandler(submitCompanySignupRequestHandler));

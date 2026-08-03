@@ -5,7 +5,8 @@ import { prismaAdmin } from "../config/prisma-admin";
 import { env } from "../config/env";
 import { ConflictError, ForbiddenError, NotFoundError } from "../utils/http-errors";
 import { sendMail } from "./mailer.service";
-import { sendInviteEmail } from "./permissoes.service";
+import { addMembershipToIdentity, sendInviteEmail } from "./permissoes.service";
+import { generateInviteCode } from "../utils/invite-code.util";
 
 const INVITE_EXPIRATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias — mesma regra do convite comum.
 
@@ -13,6 +14,10 @@ interface SubmitSignupInput {
   companyName: string;
   contactName: string;
   contactEmail: string;
+  // Presente quando o pedido parte de alguém JÁ LOGADO (fluxo atual, via
+  // /api/identidade/cadastrar-empresa). Ausente nos pedidos legados feitos
+  // da tela de login.
+  requesterAuthUserId?: string;
 }
 
 // Pública (sem autenticação) — o solicitante ainda não tem conta em lugar
@@ -26,7 +31,14 @@ export async function submitCompanySignupRequest(input: SubmitSignupInput) {
     throw new ConflictError("Já existe um pedido pendente para este e-mail.");
   }
 
-  const request = await prismaAdmin.companySignupRequest.create({ data: input });
+  const request = await prismaAdmin.companySignupRequest.create({
+    data: {
+      companyName: input.companyName,
+      contactName: input.contactName,
+      contactEmail: input.contactEmail,
+      requesterAuthUserId: input.requesterAuthUserId ?? null,
+    },
+  });
 
   await sendMail({
     to: env.platformAdminEmail,
@@ -76,8 +88,10 @@ export async function approveCompanySignupRequest(
     throw new ConflictError("Este pedido já foi aprovado ou rejeitado.");
   }
 
-  const invite = await prismaAdmin.$transaction(async (tx) => {
-    const company = await tx.company.create({ data: { name: request.companyName } });
+  const result = await prismaAdmin.$transaction(async (tx) => {
+    const company = await tx.company.create({
+      data: { name: request.companyName, inviteCode: generateInviteCode() },
+    });
 
     const cargo = await tx.cargo.create({
       data: {
@@ -88,6 +102,39 @@ export async function approveCompanySignupRequest(
       },
     });
 
+    // CAMINHO ATUAL — o solicitante já tem identidade (pediu logado).
+    // Cria o User ADMINISTRADOR direto, sem convite: mandar convite aqui
+    // era exatamente o bug que deixava a empresa vazia. A pessoa caía na
+    // tela "defina sua senha", que não faz sentido para quem já tem conta
+    // (e sobrescreveria a senha usada nas outras empresas dela), então
+    // ninguém concluía e a empresa nascia sem nenhum usuário.
+    if (request.requesterAuthUserId) {
+      const adminUser = await tx.user.create({
+        data: {
+          companyId: company.id,
+          email: request.contactEmail,
+          passwordHash: "",
+          authUserId: request.requesterAuthUserId,
+          role: "ADMINISTRADOR",
+        },
+      });
+
+      await tx.companySignupRequest.update({
+        where: { id: requestId },
+        data: {
+          status: "APROVADO",
+          reviewedByUserId: platformUser.id,
+          reviewedAt: new Date(),
+          createdCompanyId: company.id,
+        },
+      });
+
+      return { kind: "direct" as const, companyId: company.id, userId: adminUser.id };
+    }
+
+    // CAMINHO LEGADO — pedido antigo, feito da tela de login por quem não
+    // tinha conta. Segue por convite, que ali é o comportamento correto:
+    // a pessoa precisa mesmo criar uma senha.
     const createdInvite = await tx.invite.create({
       data: {
         companyId: company.id,
@@ -109,19 +156,42 @@ export async function approveCompanySignupRequest(
       },
     });
 
-    return createdInvite;
+    return { kind: "invite" as const, companyId: company.id, inviteToken: createdInvite.token };
   });
+
+  if (result.kind === "direct") {
+    // Fora da transação: escrita no Supabase não faz rollback junto com o
+    // banco. Se falhar, a empresa existe e o User existe — o acesso é
+    // recuperável reemitindo a membership, sem perder dados.
+    await addMembershipToIdentity(request.requesterAuthUserId!, {
+      userId: result.userId,
+      companyId: result.companyId,
+      role: "ADMINISTRADOR",
+    });
+
+    await sendMail({
+      to: request.contactEmail,
+      subject: `Sua empresa ${request.companyName} foi aprovada`,
+      html: `
+        <p>Olá, ${request.contactName}.</p>
+        <p>A empresa <strong>${request.companyName}</strong> foi aprovada e já está vinculada à sua conta como Administrador.</p>
+        <p>Faça login normalmente para começar a usar.</p>
+      `,
+    }).catch(() => undefined);
+
+    return { companyId: result.companyId };
+  }
 
   // Sem inviterName/inviterEmail: este convite nasce da aprovação do Super
   // Admin, não de um Admin humano da empresa — sendInviteEmail omite a
   // linha "convidado por" quando esses campos vêm vazios.
-  await sendInviteEmail(request.contactEmail, invite.token, {
+  await sendInviteEmail(request.contactEmail, result.inviteToken, {
     companyName: request.companyName,
     inviterName: "",
     inviterEmail: "",
   }).catch(() => undefined);
 
-  return { companyId: invite.companyId };
+  return { companyId: result.companyId };
 }
 
 export async function rejectCompanySignupRequest(

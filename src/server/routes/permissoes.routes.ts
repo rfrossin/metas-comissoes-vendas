@@ -18,6 +18,14 @@ import {
   updateUserRoleHandler,
 } from "../controllers/permissoes.controller";
 import { myCompaniesHandler, switchCompanyHandler } from "../controllers/auth.controller";
+import {
+  approveAccessRequestHandler,
+  getCompanyInviteCodeHandler,
+  listCompanyAccessRequestsHandler,
+  regenerateCompanyInviteCodeHandler,
+  rejectAccessRequestHandler,
+  removeUserFromCompanyHandler,
+} from "../controllers/company-access.controller";
 import { asyncHandler } from "../utils/async-handler";
 
 export const permissoesRoutes = Router();
@@ -40,3 +48,15 @@ permissoesRoutes.get("/minhas-atribuicoes", asyncHandler(getMyScopeAssignmentsHa
 permissoesRoutes.put("/minha-senha", asyncHandler(changeMyPasswordHandler));
 permissoesRoutes.get("/minhas-empresas", asyncHandler(myCompaniesHandler));
 permissoesRoutes.post("/trocar-empresa", asyncHandler(switchCompanyHandler));
+
+// Código de convite da empresa e pedidos de acesso feitos com ele. Todos
+// exigem ADMINISTRADOR — a checagem fica no serviço (assertAdmin), como no
+// restante deste módulo.
+permissoesRoutes.get("/codigo-convite", asyncHandler(getCompanyInviteCodeHandler));
+permissoesRoutes.post("/codigo-convite/regenerar", asyncHandler(regenerateCompanyInviteCodeHandler));
+permissoesRoutes.get("/pedidos-acesso", asyncHandler(listCompanyAccessRequestsHandler));
+permissoesRoutes.post("/pedidos-acesso/:id/aprovar", asyncHandler(approveAccessRequestHandler));
+permissoesRoutes.post("/pedidos-acesso/:id/recusar", asyncHandler(rejectAccessRequestHandler));
+// Saída da empresa (soft delete via leftAt) — diferente de DELETE
+// /usuarios/:userId, que remove o Login. Aqui o histórico é preservado.
+permissoesRoutes.post("/usuarios/:id/remover-da-empresa", asyncHandler(removeUserFromCompanyHandler));

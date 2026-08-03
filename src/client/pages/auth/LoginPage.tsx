@@ -2,14 +2,19 @@ import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, getErrorMessage } from "@/services/api";
 import { useAuthStore, type AuthUser, type CompanyMembership } from "@/store/auth.store";
+import { useIdentityStore } from "@/store/identity.store";
 
 type LoginResponse =
   | { status: "OK"; token: string; user: AuthUser }
-  | { status: "CHOOSE_COMPANY"; preAuthToken: string; companies: CompanyMembership[] };
+  | { status: "CHOOSE_COMPANY"; preAuthToken: string; companies: CompanyMembership[] }
+  // Credencial válida, mas sem nenhuma empresa vinculada — a pessoa entra
+  // no painel de identidade em vez de tomar um 401 sem saída.
+  | { status: "NO_COMPANY"; identityToken: string; email: string };
 
 export function LoginPage() {
   const navigate = useNavigate();
   const setSession = useAuthStore((state) => state.setSession);
+  const setIdentity = useIdentityStore((state) => state.setIdentity);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +29,11 @@ export function LoginPage() {
   function applyLoginResult(data: LoginResponse) {
     if (data.status === "CHOOSE_COMPANY") {
       setCompanyChoice({ preAuthToken: data.preAuthToken, companies: data.companies });
+      return;
+    }
+    if (data.status === "NO_COMPANY") {
+      setIdentity(data.identityToken, data.email);
+      navigate("/minha-conta");
       return;
     }
     setSession(data.token, data.user);
@@ -156,12 +166,17 @@ export function LoginPage() {
           Esqueci minha senha
         </button>
 
+        {/* Antes este botão levava direto a "Nova Empresa", o que criava um
+            pedido de empresa para quem ainda nem tinha conta — e o convite
+            de aprovação esbarrava na tela de "definir senha" de quem já era
+            usuário. Agora o caminho é único: cria-se a conta primeiro; pedir
+            empresa (ou entrar numa) acontece já logado, em /minha-conta. */}
         <button
           type="button"
-          onClick={() => navigate("/cadastrar-empresa")}
+          onClick={() => navigate("/criar-conta")}
           className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-medium text-foreground hover:bg-secondary/50"
         >
-          Nova Empresa
+          Criar conta
         </button>
       </form>
     </div>

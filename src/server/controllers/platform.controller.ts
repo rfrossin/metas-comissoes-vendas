@@ -7,7 +7,13 @@ import {
   rejectCompanySignupRequest,
   submitCompanySignupRequest,
 } from "../services/company-signup.service";
-import { listCompaniesWithUsers } from "../services/platform-companies.service";
+import {
+  listCompaniesWithUsers,
+  listOrphanIdentities,
+  platformDeleteIdentity,
+  platformRemoveUserFromCompany,
+} from "../services/platform-companies.service";
+import { getIdentityState } from "../services/identity.service";
 import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from "../utils/http-errors";
 
 function respondToError(error: unknown, res: Response) {
@@ -71,6 +77,36 @@ export async function submitCompanySignupRequestHandler(req: Request, res: Respo
   }
 }
 
+const signupFromIdentitySchema = z.object({
+  companyName: z.string().trim().min(2, "Informe o nome da empresa"),
+});
+
+// Pedido de nova empresa feito por quem JÁ está logado (rota
+// /api/identidade/cadastrar-empresa). Nome e e-mail de contato vêm da
+// identidade autenticada, não do corpo — assim o vínculo de Administrador
+// criado na aprovação aponta necessariamente para quem pediu.
+export async function submitCompanySignupFromIdentityHandler(req: Request, res: Response) {
+  const parsed = signupFromIdentitySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Dados inválidos" });
+    return;
+  }
+
+  const identity = await getIdentityState(req.identity!.authUserId);
+
+  try {
+    const request = await submitCompanySignupRequest({
+      companyName: parsed.data.companyName,
+      contactName: identity.name || identity.email,
+      contactEmail: identity.email,
+      requesterAuthUserId: req.identity!.authUserId,
+    });
+    res.status(201).json({ id: request.id });
+  } catch (error) {
+    respondToError(error, res);
+  }
+}
+
 const statusQuerySchema = z.enum(["PENDENTE", "APROVADO", "REJEITADO"]);
 
 // Protegida por platformAuthMiddleware.
@@ -99,6 +135,36 @@ export async function listCompaniesWithUsersHandler(_req: Request, res: Response
   try {
     const companies = await listCompaniesWithUsers();
     res.json(companies);
+  } catch (error) {
+    respondToError(error, res);
+  }
+}
+
+// Identidades sem nenhuma empresa ativa — quem se cadastrou e ainda não
+// entrou em nenhuma, e quem saiu da última.
+export async function listOrphanIdentitiesHandler(_req: Request, res: Response) {
+  try {
+    res.json(await listOrphanIdentities());
+  } catch (error) {
+    respondToError(error, res);
+  }
+}
+
+// Tira o usuário de UMA empresa; a identidade continua existindo.
+export async function platformRemoveUserFromCompanyHandler(req: Request, res: Response) {
+  try {
+    await platformRemoveUserFromCompany(req.platformUser!, req.params.userId);
+    res.status(204).send();
+  } catch (error) {
+    respondToError(error, res);
+  }
+}
+
+// Exclui a identidade do sistema inteiro (Supabase Auth).
+export async function platformDeleteIdentityHandler(req: Request, res: Response) {
+  try {
+    await platformDeleteIdentity(req.platformUser!, req.params.authUserId);
+    res.status(204).send();
   } catch (error) {
     respondToError(error, res);
   }

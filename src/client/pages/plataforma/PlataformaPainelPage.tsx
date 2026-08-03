@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { platformApi, getPlatformErrorMessage } from "@/services/platform-api";
 import { usePlatformAuthStore } from "@/store/platform-auth.store";
+import { UsuariosSemEmpresaSection } from "./UsuariosSemEmpresaSection";
 
 interface CompanySignupRequest {
   id: string;
@@ -17,8 +18,15 @@ interface CompanyUser {
   email: string;
   role: string;
   isActive: boolean;
+  // createdAt = entrada na empresa; leftAt = saída (null se ainda está lá).
   createdAt: string;
+  leftAt: string | null;
   member: { fullName: string } | null;
+}
+
+function formatDate(value: string | null): string {
+  if (!value) return "—";
+  return new Date(value).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 interface CompanyWithUsers {
@@ -46,6 +54,9 @@ export function PlataformaPainelPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Remoção de um usuário de uma empresa (saída), pedindo confirmação —
+  // é ação destrutiva de acesso e não deve disparar num clique só.
+  const [confirmRemoveUserId, setConfirmRemoveUserId] = useState<string | null>(null);
 
   const [newUserName, setNewUserName] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
@@ -70,6 +81,23 @@ export function PlataformaPainelPage() {
       setError(getPlatformErrorMessage(err, "Não foi possível carregar os dados."));
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  // Encerra o vínculo do usuário com a empresa (leftAt). A identidade
+  // continua existindo e pode entrar em outra empresa — diferente de
+  // excluir o login, que fica na seção de usuários sem empresa.
+  async function handleRemoveFromCompany(userId: string) {
+    setBusyId(userId);
+    setError(null);
+    try {
+      await platformApi.delete(`/plataforma/vinculos/${userId}`);
+      setConfirmRemoveUserId(null);
+      await loadAll();
+    } catch (err) {
+      setError(getPlatformErrorMessage(err, "Não foi possível remover o usuário da empresa."));
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -244,6 +272,8 @@ export function PlataformaPainelPage() {
           </form>
         </section>
 
+        <UsuariosSemEmpresaSection />
+
         <section className="space-y-3">
           <h2 className="text-lg font-semibold text-foreground">Empresas e usuários</h2>
 
@@ -268,7 +298,10 @@ export function PlataformaPainelPage() {
                         <th className="pb-1 pr-2 font-normal">Nome</th>
                         <th className="pb-1 pr-2 font-normal">E-mail</th>
                         <th className="pb-1 pr-2 font-normal">Papel</th>
-                        <th className="pb-1 font-normal">Status</th>
+                        <th className="pb-1 pr-2 font-normal">Entrada</th>
+                        <th className="pb-1 pr-2 font-normal">Saída</th>
+                        <th className="pb-1 pr-2 font-normal">Status</th>
+                        <th className="pb-1 font-normal" />
                       </tr>
                     </thead>
                     <tbody>
@@ -277,7 +310,42 @@ export function PlataformaPainelPage() {
                           <td className="py-1 pr-2 text-foreground">{user.member?.fullName ?? "—"}</td>
                           <td className="py-1 pr-2 text-foreground">{user.email}</td>
                           <td className="py-1 pr-2 text-muted-foreground">{user.role}</td>
-                          <td className="py-1 text-muted-foreground">{user.isActive ? "Ativo" : "Inativo"}</td>
+                          <td className="py-1 pr-2 text-muted-foreground">{formatDate(user.createdAt)}</td>
+                          <td className="py-1 pr-2 text-muted-foreground">{formatDate(user.leftAt)}</td>
+                          <td className="py-1 pr-2 text-muted-foreground">
+                            {user.leftAt ? "Saiu" : user.isActive ? "Ativo" : "Inativo"}
+                          </td>
+                          <td className="py-1 text-right">
+                            {/* Quem já saiu não tem o que remover. */}
+                            {!user.leftAt &&
+                              (confirmRemoveUserId === user.id ? (
+                                <span className="flex items-center justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={busyId === user.id}
+                                    onClick={() => void handleRemoveFromCompany(user.id)}
+                                    className="rounded-md bg-destructive px-2 py-0.5 text-xs font-medium text-destructive-foreground disabled:opacity-50"
+                                  >
+                                    {busyId === user.id ? "..." : "Confirmar"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmRemoveUserId(null)}
+                                    className="text-xs text-muted-foreground hover:text-foreground"
+                                  >
+                                    Cancelar
+                                  </button>
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmRemoveUserId(user.id)}
+                                  className="rounded-md border border-input px-2 py-0.5 text-xs text-foreground hover:bg-secondary/50"
+                                >
+                                  Remover
+                                </button>
+                              ))}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

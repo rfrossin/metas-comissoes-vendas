@@ -37,6 +37,16 @@ ENV PRISMA_QUERY_ENGINE_LIBRARY=/app/node_modules/.prisma/client/libquery_engine
 
 COPY --from=build /app/dist ./dist
 
+# CLI do Prisma vinda do estágio de build: aqui rodou "npm ci --omit=dev" e
+# "prisma" é devDependency, então o binário não existiria nesta imagem — e
+# "migrate deploy" no start falharia com "prisma: not found". Copiar só
+# estes dois diretórios evita trazer todas as devDependencies de volta.
+COPY --from=build /app/node_modules/prisma ./node_modules/prisma
+COPY --from=build /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
+
+COPY docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
+
 # Roda como usuário sem privilégio — reduz o blast radius se o processo
 # Node for comprometido (sem permissão para instalar pacotes, alterar
 # arquivos de sistema, etc.). A aplicação não escreve em disco (uploads
@@ -45,4 +55,7 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser && chown -R appuser:app
 USER appuser
 
 EXPOSE 3333
-CMD ["node", "dist/server/index.js"]
+# Entrypoint aplica as migrations pendentes ANTES de subir o servidor: sem
+# isso, um deploy com schema novo sobe código que consulta colunas que
+# ainda não existem no banco.
+CMD ["./docker-entrypoint.sh"]

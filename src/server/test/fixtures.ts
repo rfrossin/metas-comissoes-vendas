@@ -4,6 +4,7 @@ import type { RequestingUser } from "../services/scope.util";
 import { supabaseAdmin } from "../config/supabase";
 import type { Membership } from "../services/auth.service";
 import { tenantContext } from "../config/tenant-context";
+import { generateInviteCode } from "../utils/invite-code.util";
 
 // DIRECT_URL explicitamente: sempre a conexão privilegiada (mesma usada
 // por Prisma Migrate), independente do que DATABASE_URL/DATABASE_URL_RESTRICTED
@@ -38,7 +39,7 @@ export interface TenantFixture {
 
 async function buildTenant(label: "A" | "B"): Promise<TenantFixture> {
   const company = await prismaTest.company.create({
-    data: { name: `Empresa Teste ${label}` },
+    data: { name: `Empresa Teste ${label}`, inviteCode: generateInviteCode() },
   });
 
   const channel = await prismaTest.channel.create({

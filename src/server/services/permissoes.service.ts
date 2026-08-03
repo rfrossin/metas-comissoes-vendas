@@ -20,7 +20,10 @@ interface AppMetadataShape {
 // (cenário de consultor/usuário com acesso a múltiplas empresas). Usado no
 // aceite de convite quando a identidade já existe (Fase 3: e-mail único
 // global) e no backfill de usuários migrados.
-async function addMembershipToIdentity(authUserId: string, membership: Membership): Promise<void> {
+// Exportada também para company-access.service.ts (aprovação de pedido de
+// acesso), que precisa exatamente do mesmo comportamento de preservar as
+// memberships de outras empresas.
+export async function addMembershipToIdentity(authUserId: string, membership: Membership): Promise<void> {
   const { data, error } = await supabaseAdmin.auth.admin.getUserById(authUserId);
   if (error || !data.user) {
     throw new Error(`Identidade Supabase não encontrada para authUserId=${authUserId}`);
@@ -254,6 +257,35 @@ export async function cancelInvite(companyId: string, requestingUser: Requesting
 // em texto claro. companyId/role vêm sempre do registro Invite já
 // existente no banco, nunca de dado enviado pelo cliente, para não abrir
 // brecha de um convidado se auto-atribuir a outra empresa.
+// A tela de aceite precisa saber se quem clicou no link JÁ tem conta: para
+// quem tem, pedir "defina sua senha" é sem sentido e — pior — sobrescreve a
+// senha que a pessoa usa nas outras empresas dela. Devolve só o necessário
+// para a tela decidir, sem expor dados do convite a quem não deveria vê-los.
+export async function getInvitePublicInfo(token: string) {
+  const invite = await prisma.invite.findUnique({
+    where: { token },
+    select: { email: true, status: true, expiresAt: true, company: { select: { name: true } } },
+  });
+  if (!invite || invite.status !== "PENDENTE") {
+    throw new NotFoundError("Convite inválido ou já utilizado.");
+  }
+  if (invite.expiresAt < new Date()) {
+    throw new ConflictError("Este convite expirou. Peça ao Administrador para gerar um novo.");
+  }
+
+  // listUsers com filtro por e-mail: a Admin API não tem "getUserByEmail".
+  const { data } = await supabaseAdmin.auth.admin.listUsers();
+  const identityExists = data?.users.some((u) => u.email?.toLowerCase() === invite.email.toLowerCase()) ?? false;
+
+  return {
+    email: invite.email,
+    companyName: invite.company.name,
+    // true = a pessoa já tem login; a tela pede a senha ATUAL dela em vez
+    // de mandar criar uma nova.
+    identityExists,
+  };
+}
+
 export async function acceptInvite(token: string, authUserId: string) {
   const invite = await prisma.invite.findUnique({ where: { token } });
   if (!invite || invite.status !== "PENDENTE") {
@@ -263,12 +295,39 @@ export async function acceptInvite(token: string, authUserId: string) {
     throw new ConflictError("Este convite expirou. Peça ao Administrador para gerar um novo.");
   }
 
+  // O papel vem do Cargo do convite, não fixo em OPERACIONAL. Com o valor
+  // fixo, quem era convidado como Administrador (inclusive o solicitante de
+  // uma empresa nova, cujo convite aponta para o Cargo "Administrador")
+  // entrava como Operacional e ficava sem conseguir configurar a própria
+  // empresa. Sem cargo definido, OPERACIONAL segue como padrão seguro — o
+  // menor privilégio.
+  const cargo = invite.cargoId
+    ? await prisma.cargo.findUnique({ where: { id: invite.cargoId }, select: { permissionLevel: true } })
+    : null;
+  const role = cargo?.permissionLevel ?? "OPERACIONAL";
+
   // explicitCompanyId: rota pública, sem tenantContext (o convidado ainda
   // não tem token de app) — o tenant vem do próprio Invite já validado
   // acima, nunca de dado enviado pelo cliente.
   const user = await withTenant(
     async (tx) => {
       await tx.invite.update({ where: { id: invite.id }, data: { status: "ACEITO", acceptedAt: new Date() } });
+
+      // Quem já esteve nesta empresa tem linha com leftAt preenchido:
+      // reativar respeita a unique (authUserId, companyId), que um create
+      // violaria, e preserva o histórico.
+      const previous = await tx.user.findFirst({
+        where: { authUserId, companyId: invite.companyId },
+        select: { id: true },
+      });
+
+      if (previous) {
+        return tx.user.update({
+          where: { id: previous.id },
+          data: { leftAt: null, isActive: true, role, memberId: invite.memberId, email: invite.email },
+        });
+      }
+
       return tx.user.create({
         data: {
           companyId: invite.companyId,
@@ -277,7 +336,7 @@ export async function acceptInvite(token: string, authUserId: string) {
           // a credencial real vive só no Supabase a partir daqui.
           passwordHash: "",
           authUserId,
-          role: "OPERACIONAL",
+          role,
           memberId: invite.memberId,
         },
       });

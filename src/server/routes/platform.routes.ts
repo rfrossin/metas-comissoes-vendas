@@ -4,8 +4,11 @@ import {
   createPlatformUserHandler,
   listCompaniesWithUsersHandler,
   listCompanySignupRequestsHandler,
+  listOrphanIdentitiesHandler,
   listPlatformUsersHandler,
+  platformDeleteIdentityHandler,
   platformLoginHandler,
+  platformRemoveUserFromCompanyHandler,
   rejectCompanySignupRequestHandler,
 } from "../controllers/platform.controller";
 import { platformAuthMiddleware } from "../middlewares/platform-auth.middleware";
@@ -26,3 +29,9 @@ platformRoutes.post("/pedidos-empresa/:id/aprovar", asyncHandler(approveCompanyS
 platformRoutes.post("/pedidos-empresa/:id/rejeitar", asyncHandler(rejectCompanySignupRequestHandler));
 platformRoutes.get("/usuarios", asyncHandler(listPlatformUsersHandler));
 platformRoutes.post("/usuarios", asyncHandler(createPlatformUserHandler));
+
+// Identidades sem empresa e remoção de acessos (só SUPER_ADMIN — checado
+// nos serviços).
+platformRoutes.get("/usuarios-sem-empresa", asyncHandler(listOrphanIdentitiesHandler));
+platformRoutes.delete("/vinculos/:userId", asyncHandler(platformRemoveUserFromCompanyHandler));
+platformRoutes.delete("/identidades/:authUserId", asyncHandler(platformDeleteIdentityHandler));

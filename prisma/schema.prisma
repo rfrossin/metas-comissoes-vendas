@@ -22,11 +22,19 @@ model Company {
   id        String        @id @default(cuid())
   name      String
   status    CompanyStatus @default(ATIVA)
+  // Código de convite compartilhável da empresa: o Admin passa para o
+  // colaborador, que o usa para pedir acesso (CompanyAccessRequest). É
+  // regenerável — trocar o código invalida os pedidos futuros com o
+  // código antigo sem afetar quem já entrou. Deliberadamente separado do
+  // `id`: o id é chave de integridade e aparece em URLs/logs; este pode
+  // circular por WhatsApp e ser rotacionado quando vazar.
+  inviteCode String       @unique
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
   users                          User[]
   invites                        Invite[]
+  accessRequests                 CompanyAccessRequest[]
   channels                       Channel[]
   departments                    Department[]
   teams                          Team[]
@@ -98,6 +106,13 @@ model CompanySignupRequest {
   companyName     String
   contactName     String
   contactEmail    String
+  // Identidade Supabase do solicitante. Preenchido no fluxo novo (pedido
+  // feito por quem JÁ está logado): na aprovação, essa identidade vira
+  // ADMINISTRADOR da empresa criada, sem convite nem tela de senha.
+  //
+  // Null nos pedidos antigos, submetidos da tela de login por quem não
+  // tinha conta — aqueles seguem caindo no caminho de convite por e-mail.
+  requesterAuthUserId String?
   status          SignupRequestStatus @default(PENDENTE)
   reviewedByUserId String?
   reviewedAt      DateTime?
@@ -112,6 +127,46 @@ model CompanySignupRequest {
 }
 
 enum SignupRequestStatus {
+  PENDENTE
+  APROVADO
+  REJEITADO
+}
+
+// Pedido de acesso a uma empresa JÁ EXISTENTE, feito por um usuário que já
+// tem identidade (login) mas nenhum vínculo com ela — usando o inviteCode
+// que o Admin divulgou. Quem aprova é o ADMIN DA EMPRESA, não o Super
+// Admin: é a empresa que decide quem entra nela.
+//
+// Fora do particionamento por companyId nas leituras do solicitante (ele
+// ainda não é do tenant), mas toda leitura pelo lado do Admin filtra por
+// companyId normalmente.
+model CompanyAccessRequest {
+  id         String              @id @default(cuid())
+  companyId  String
+  // Identidade Supabase do solicitante (auth.users.uuid). Não referencia
+  // User: o solicitante justamente ainda NÃO tem User nesta empresa — é o
+  // que ele está pedindo.
+  authUserId String
+  email      String
+  name       String
+  status     AccessRequestStatus @default(PENDENTE)
+  // User.id do Admin que revisou (não FK: o Login do Admin pode ser
+  // excluído depois sem apagar o histórico do pedido).
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  rejectionReason  String?
+  createdAt        DateTime            @default(now())
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  // Impede spam de pedidos duplicados do mesmo usuário para a mesma
+  // empresa (a checagem de status PENDENTE fica no serviço).
+  @@index([companyId, status])
+  @@index([authUserId])
+  @@map("company_access_requests")
+}
+
+enum AccessRequestStatus {
   PENDENTE
   APROVADO
   REJEITADO
@@ -145,8 +200,18 @@ model User {
   // Sem efeito se memberId for null. Não afeta Metas/Recebíveis do Membro.
   canLaunchOwnMemberResults Boolean @default(false)
   isActive     Boolean         @default(true)
+  // createdAt = data de ENTRADA nesta empresa (cada linha é uma membership).
+  // A data de cadastro da IDENTIDADE não vive aqui: é auth.users.created_at
+  // no Supabase, consultada sob demanda — duplicá-la sairia do sincronismo.
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
+  // Data de SAÍDA da empresa. Null = vínculo ativo. Preenchido em vez de
+  // apagar a linha: o histórico de quem passou pela empresa (e quando)
+  // precisa sobreviver à saída, e as FKs de auditoria (fechamentos,
+  // campanhas criadas) apontam para este User — deletar quebraria o
+  // histórico financeiro. Quem saiu perde o acesso via este campo, checado
+  // no login e na emissão de token.
+  leftAt       DateTime?
 
   company Company @relation(fields: [companyId], references: [id])
   member  Member? @relation(fields: [memberId], references: [id])
@@ -161,6 +226,12 @@ model User {
   receivablesBasesCreated       ReceivablesBase[]
   scopeAssignments              UserScopeAssignment[]
 
+  // Estas duas uniques permanecem mesmo com leftAt: quem sai e volta
+  // REATIVA a linha existente (leftAt = null) em vez de criar uma segunda.
+  // Criar linha nova por reentrada exigiria dropar as uniques — abrindo
+  // espaço para memberships duplicadas na mesma empresa, um risco bem pior
+  // do que perder o registro de cada passagem separadamente. As datas de
+  // entrada/saída anteriores ficam no histórico da própria linha.
   @@unique([companyId, email])
   @@unique([authUserId, companyId])
   @@index([companyId])

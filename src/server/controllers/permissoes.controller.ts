@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import {
   acceptInvite,
+  getInvitePublicInfo,
   adminSetUserEmail,
   cancelInvite,
   changeMyPassword,
@@ -128,6 +129,17 @@ export async function cancelInviteHandler(req: Request, res: Response) {
   try {
     await cancelInvite(req.user!.companyId, req.user!, req.params.id);
     res.status(204).send();
+  } catch (error) {
+    respondToError(error, res);
+  }
+}
+
+// Pública — a tela de aceite consulta antes de renderizar, para decidir
+// entre pedir uma senha nova (identidade não existe) ou a senha atual
+// (identidade já existe, entrando em mais uma empresa).
+export async function getInvitePublicInfoHandler(req: Request, res: Response) {
+  try {
+    res.json(await getInvitePublicInfo(req.params.token));
   } catch (error) {
     respondToError(error, res);
   }

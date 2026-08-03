@@ -4,6 +4,7 @@ import helmet from "helmet";
 import { routes } from "./routes";
 import { authRoutes } from "./routes/auth.routes";
 import { platformRoutes } from "./routes/platform.routes";
+import { identityRoutes } from "./routes/identity.routes";
 import { authMiddleware } from "./middlewares/auth.middleware";
 import { tenantMiddleware } from "./middlewares/tenant.middleware";
 import { errorMiddleware } from "./middlewares/error.middleware";
@@ -35,6 +36,11 @@ app.use("/api/auth", authRoutes);
 // Fora do tenantMiddleware — o Super Admin da plataforma não pertence a
 // nenhuma Company.
 app.use("/api/plataforma", platformRoutes);
+// Também fora do tenantMiddleware, pelo mesmo motivo: o dono de um token
+// de identidade pode não ter empresa nenhuma. Precisa vir ANTES do
+// app.use("/api", authMiddleware, ...) abaixo — aquele middleware exige
+// token de tenant e rejeitaria estas rotas com 401.
+app.use("/api/identidade", identityRoutes);
 app.use("/api", authMiddleware, tenantMiddleware, routes);
 
 app.use(errorMiddleware);

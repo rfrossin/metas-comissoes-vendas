@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { EditarUsuarioModal } from "./EditarUsuarioModal";
+import { CodigoConviteCard } from "./CodigoConviteCard";
 import { PERMISSION_LEVEL_LABELS, hierarchyLabel, type CompanyUser, type PendingInvite, type PermissionLevel } from "./types";
 
 const emptyInviteForm = { name: "", email: "" };
@@ -96,6 +97,9 @@ export function GestaoUsuariosSection({ companyName, role }: { companyName: stri
 
   return (
     <div className="space-y-6">
+      {/* Só ADMINISTRADOR: é quem aprova entrada de gente na empresa. */}
+      {isAdmin && <CodigoConviteCard />}
+
       {isAdmin && (
         <div className="space-y-3 rounded-lg border border-border bg-card p-4">
           <h2 className="text-sm font-semibold text-foreground">Empresa</h2>

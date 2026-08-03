@@ -12,9 +12,11 @@ import { LoadingState } from "@/components/AsyncState";
 // aparecer.
 import { LoginPage } from "@/pages/auth/LoginPage";
 import { CadastrarEmpresaPage } from "@/pages/auth/CadastrarEmpresaPage";
+import { CriarContaPage } from "@/pages/auth/CriarContaPage";
 import { EsqueciSenhaPage } from "@/pages/auth/EsqueciSenhaPage";
 import { RedefinirSenhaPage } from "@/pages/auth/RedefinirSenhaPage";
 import { AceitarConvitePage } from "@/pages/convite/AceitarConvitePage";
+import { RequireIdentity } from "./RequireIdentity";
 
 // Demais telas carregadas sob demanda — antes, todo visitante baixava as
 // 27 páginas (incluindo Recharts e xlsx, pesadíssimos) antes de ver a tela
@@ -45,14 +47,27 @@ const FechamentoPage = lazy(() => import("@/pages/fechamento/FechamentoPage").th
 const MemberClosingDetailPage = lazy(() => import("@/pages/fechamento/MemberClosingDetailPage").then((m) => ({ default: m.MemberClosingDetailPage })));
 const ImprimirFechamentosPage = lazy(() => import("@/pages/fechamento/ImprimirFechamentosPage").then((m) => ({ default: m.ImprimirFechamentosPage })));
 const UsuariosPage = lazy(() => import("@/pages/usuarios/UsuariosPage").then((m) => ({ default: m.UsuariosPage })));
+const MinhaContaPage = lazy(() => import("@/pages/identidade/MinhaContaPage").then((m) => ({ default: m.MinhaContaPage })));
 
 export function AppRoutes() {
   return (
     <Suspense fallback={<div className="p-6"><LoadingState /></div>}>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/criar-conta" element={<CriarContaPage />} />
+      {/* Mantida por compatibilidade: links antigos de "Nova Empresa" ainda
+          circulam por e-mail. A tela agora orienta a criar conta primeiro. */}
       <Route path="/cadastrar-empresa" element={<CadastrarEmpresaPage />} />
       <Route path="/esqueci-senha" element={<EsqueciSenhaPage />} />
+      {/* Painel de quem está autenticado mas ainda não tem empresa. */}
+      <Route
+        path="/minha-conta"
+        element={
+          <RequireIdentity>
+            <MinhaContaPage />
+          </RequireIdentity>
+        }
+      />
       <Route path="/redefinir-senha" element={<RedefinirSenhaPage />} />
       <Route path="/convite/:token" element={<AceitarConvitePage />} />
       <Route path="/admin-plataforma/login" element={<PlataformaLoginPage />} />

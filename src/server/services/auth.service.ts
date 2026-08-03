@@ -3,6 +3,7 @@ import { prisma } from "../config/prisma";
 import { supabaseAdmin, supabaseAuth } from "../config/supabase";
 import { env } from "../config/env";
 import { UnauthorizedError } from "../utils/http-errors";
+import { signIdentityToken } from "./identity.service";
 
 interface LoginInput {
   email: string;
@@ -21,6 +22,25 @@ export interface Membership {
 
 interface AppMetadataShape {
   memberships?: Membership[];
+}
+
+// O app_metadata é a fonte de verdade de QUAIS empresas a identidade
+// conhece, mas não de o vínculo ainda valer: quem saiu (leftAt) ou foi
+// desativado (isActive false) continua listado lá até o metadata ser
+// reescrito. Esta função cruza com o banco, que é a autoridade — sem isso,
+// um usuário removido seguiria logando na empresa da qual saiu.
+async function filterActiveMemberships(authUserId: string, memberships: Membership[]): Promise<Membership[]> {
+  const active = await prisma.user.findMany({
+    where: {
+      authUserId,
+      companyId: { in: memberships.map((m) => m.companyId) },
+      leftAt: null,
+      isActive: true,
+    },
+    select: { companyId: true },
+  });
+  const activeCompanyIds = new Set(active.map((u) => u.companyId));
+  return memberships.filter((m) => activeCompanyIds.has(m.companyId));
 }
 
 function signAppToken(membership: Membership): string {
@@ -44,6 +64,17 @@ export type LoginResult =
       // novo — não substitui o token completo da aplicação.
       preAuthToken: string;
       companies: { companyId: string; companyName: string; role: string }[];
+    }
+  | {
+      // Credencial VÁLIDA, mas a identidade não pertence a nenhuma empresa
+      // (acabou de se cadastrar, ou saiu/foi removida da última). Antes
+      // isto era um 401 "não vinculado a nenhuma empresa", o que deixava a
+      // pessoa sem saída: ela não conseguia entrar nem para pedir acesso.
+      // Agora entra com token de escopo "identity" e cai no painel de
+      // identidade, onde pode criar empresa ou pedir acesso a uma.
+      status: "NO_COMPANY";
+      identityToken: string;
+      email: string;
     };
 
 // Login delega a verificação de e-mail/senha ao Supabase Auth
@@ -59,10 +90,20 @@ export async function login({ email, password }: LoginInput): Promise<LoginResul
   }
 
   const appMetadata = data.user.app_metadata as AppMetadataShape;
-  const memberships = appMetadata.memberships ?? [];
+  const rawMemberships = appMetadata.memberships ?? [];
+
+  // O app_metadata pode listar empresas das quais a pessoa já saiu (o
+  // metadata é limpo na saída, mas isto é defesa em profundidade contra
+  // dessincronização). O banco é a autoridade sobre o vínculo ainda valer:
+  // leftAt null e isActive true.
+  const memberships = rawMemberships.length ? await filterActiveMemberships(data.user.id, rawMemberships) : [];
 
   if (memberships.length === 0) {
-    throw new UnauthorizedError("Este usuário não está vinculado a nenhuma empresa.");
+    return {
+      status: "NO_COMPANY",
+      identityToken: signIdentityToken(data.user.id, data.user.email ?? email),
+      email: data.user.email ?? email,
+    };
   }
 
   if (memberships.length > 1) {
@@ -88,10 +129,13 @@ export async function login({ email, password }: LoginInput): Promise<LoginResul
   const membership = memberships[0];
   const user = await prisma.user.findFirst({
     where: { id: membership.userId, companyId: membership.companyId },
-    select: { id: true, email: true, role: true, companyId: true, memberId: true, isActive: true },
+    select: { id: true, email: true, role: true, companyId: true, memberId: true, isActive: true, leftAt: true },
   });
 
-  if (!user || !user.isActive) {
+  // leftAt já foi filtrado em filterActiveMemberships acima; repetido aqui
+  // porque esta consulta é por id e não repassa aquele filtro — barato, e
+  // evita depender da ordem das checagens se alguém editar o fluxo depois.
+  if (!user || !user.isActive || user.leftAt) {
     throw new UnauthorizedError("Credenciais inválidas");
   }
 
@@ -129,9 +173,11 @@ export async function chooseCompany(preAuthToken: string, companyId: string): Pr
 
   const user = await prisma.user.findFirst({
     where: { id: membership.userId, companyId: membership.companyId },
-    select: { id: true, email: true, role: true, companyId: true, memberId: true, isActive: true },
+    select: { id: true, email: true, role: true, companyId: true, memberId: true, isActive: true, leftAt: true },
   });
-  if (!user || !user.isActive) {
+  // leftAt junto de isActive: sair da empresa tem de barrar este caminho
+  // tanto quanto ser desativado.
+  if (!user || !user.isActive || user.leftAt) {
     throw new UnauthorizedError("Credenciais inválidas");
   }
 
@@ -157,7 +203,10 @@ export async function listMyCompanies(requestingUserId: string): Promise<Members
   if (error || !data.user) return [];
 
   const appMetadata = data.user.app_metadata as AppMetadataShape;
-  return appMetadata.memberships ?? [];
+  const raw = appMetadata.memberships ?? [];
+  // Mesmo cruzamento com o banco do login: o seletor de empresa do Header
+  // não pode oferecer uma empresa da qual a pessoa já saiu.
+  return raw.length ? filterActiveMemberships(user.authUserId, raw) : [];
 }
 
 // Troca de empresa ativa para um usuário já logado — reemite o token da
@@ -172,9 +221,11 @@ export async function switchCompany(requestingUserId: string, companyId: string)
 
   const user = await prisma.user.findFirst({
     where: { id: membership.userId, companyId: membership.companyId },
-    select: { id: true, email: true, role: true, companyId: true, memberId: true, isActive: true },
+    select: { id: true, email: true, role: true, companyId: true, memberId: true, isActive: true, leftAt: true },
   });
-  if (!user || !user.isActive) {
+  // leftAt junto de isActive: sair da empresa tem de barrar este caminho
+  // tanto quanto ser desativado.
+  if (!user || !user.isActive || user.leftAt) {
     throw new UnauthorizedError("Credenciais inválidas");
   }
 

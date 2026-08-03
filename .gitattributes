@@ -1,0 +1,4 @@
+# Scripts de shell precisam de LF mesmo em checkout Windows: com CRLF, o
+# Linux lê o "\r" como parte do shebang e falha com "not found" — erro
+# críptico e difícil de diagnosticar dentro de um container.
+*.sh text eol=lf
