@@ -26,6 +26,16 @@ const queryClient = new QueryClient({
   },
 });
 
+// O service worker (registerType: "autoUpdate") só troca de versão no
+// SEGUNDO carregamento: no primeiro ele ainda serve o cache antigo enquanto
+// baixa o novo. Forçar update() a cada carga encurta essa janela — importa
+// aqui porque uma build velha do front pode conversar com uma API já
+// atualizada. Silencioso de propósito: falhar em atualizar não deve
+// impedir o app de abrir.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.ready.then((reg) => reg.update()).catch(() => {});
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ErrorBoundary>
