@@ -13,10 +13,28 @@
     "skipLibCheck": true,
     "outDir": "dist",
     "rootDir": "src",
-    "baseUrl": ".",
-    "paths": {
-      "@shared/*": ["src/shared/*"]
-    }
+    // Dentro de dist/ de propósito: quando estava na raiz, um `rm -rf dist`
+    // deixava o cache para trás e o tsc saía com código 0 sem emitir nada
+    // ("Emit time: 0.00s", dist/ vazio) — o build "passava" e o container
+    // subia sem dist/server/index.js.
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+
+    // SEM `paths`/`baseUrl` de propósito. O alias "@shared/*" só existe em
+    // compile-time: o tsc usa para checar tipos, mas o JS emitido mantém
+    // require("@shared/...") literal, e o backend roda em CommonJS puro,
+    // sem tsconfig-paths/module-alias. Em 04/08/2026 isso derrubou a
+    // produção por ~15min (MODULE_NOT_FOUND no boot). Sem o alias aqui, um
+    // import desses num arquivo de servidor falha com TS2307 na compilação
+    // — erro de build em vez de incidente. O frontend segue usando o alias
+    // normalmente (tsconfig.app.json + vite.config.ts), onde ele é
+    // resolvido de verdade.
   },
-  "include": ["src/server", "src/shared"]
+  "include": ["src/server", "src/shared"],
+  // Testes fora do build de produção: eles importam vitest, que não existe
+  // na imagem (npm ci --omit=dev), e chegaram a derrubar um deploy com
+  // TS1378. "src/server/test" cobre fixtures.ts/integration-setup.ts, que
+  // não casam com *.test.ts mas também são código de teste (resetDatabase
+  // numa imagem de produção). O Vitest não é afetado: ele usa o próprio
+  // include em vitest.config.ts.
+  "exclude": ["**/*.test.ts", "src/server/test"]
 }

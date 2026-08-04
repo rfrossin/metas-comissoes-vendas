@@ -11,6 +11,8 @@
     "tsc": "tsc -b",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "verify": "sh scripts/verify.sh",
+    "smoke": "sh scripts/smoke.sh",
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",

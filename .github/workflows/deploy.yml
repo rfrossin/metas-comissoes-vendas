@@ -9,7 +9,35 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Gate: nada toca o VPS antes daqui passar. Sem este job, um erro de
+  # compilação só era descoberto pelo `docker compose up --build` no
+  # servidor — com o deploy já em andamento e a produção no caminho.
+  # Falhando aqui, a versão anterior continua no ar, intacta.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      # Só os testes unitários — vitest.config.ts exclui os
+      # *.integration.test.ts, que exigem Postgres.
+      - name: Testes unitários
+        run: npm test
+
+      # Reproduz o Docker (build limpo) e, sobretudo, EXECUTA o JS
+      # compilado exigindo 200 em /health. É o que pega erro de runtime
+      # (MODULE_NOT_FOUND e afins) que tsc e testes não veem.
+      - name: Typecheck, build e smoke test do JS compilado
+        run: npm run verify
+
   deploy:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
@@ -19,6 +47,11 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           # A chave é restrita via `command=` em authorized_keys no VPS —
-          # sempre executa /opt/metas/deploy.sh (git pull + docker compose
-          # up --build), independente do que for enviado aqui.
+          # sempre executa /opt/metas/deploy.sh, independente do que for
+          # enviado aqui. Aquele script espera o healthcheck do container e
+          # sai com código != 0 se ele não ficar saudável; a ssh-action
+          # propaga esse código, então este job fica VERMELHO num deploy
+          # quebrado (antes ficava verde com a API em 502).
           script: echo "deploy triggered"
+          # O build no VPS leva alguns minutos; o padrão da action é menor.
+          command_timeout: 10m
