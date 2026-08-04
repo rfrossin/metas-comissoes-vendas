@@ -264,7 +264,7 @@ export async function cancelInvite(companyId: string, requestingUser: Requesting
 export async function getInvitePublicInfo(token: string) {
   const invite = await prisma.invite.findUnique({
     where: { token },
-    select: { email: true, status: true, expiresAt: true, company: { select: { name: true } } },
+    select: { email: true, name: true, status: true, expiresAt: true, company: { select: { name: true } } },
   });
   if (!invite || invite.status !== "PENDENTE") {
     throw new NotFoundError("Convite inválido ou já utilizado.");
@@ -275,7 +275,14 @@ export async function getInvitePublicInfo(token: string) {
 
   // listUsers com filtro por e-mail: a Admin API não tem "getUserByEmail".
   const { data } = await supabaseAdmin.auth.admin.listUsers();
-  const identityExists = data?.users.some((u) => u.email?.toLowerCase() === invite.email.toLowerCase()) ?? false;
+  const existing = data?.users.find((u) => u.email?.toLowerCase() === invite.email.toLowerCase());
+  const identityExists = Boolean(existing);
+
+  // Identidades antigas (anteriores à obrigatoriedade do celular) existem
+  // mas podem não ter o dado. Nesse caso a tela de aceite pede o celular
+  // mesmo para quem já tem conta — é a oportunidade de completar o cadastro.
+  const metadata = (existing?.user_metadata ?? {}) as { phone?: string };
+  const needsPhone = !metadata.phone;
 
   return {
     email: invite.email,
@@ -283,16 +290,56 @@ export async function getInvitePublicInfo(token: string) {
     // true = a pessoa já tem login; a tela pede a senha ATUAL dela em vez
     // de mandar criar uma nova.
     identityExists,
+    // true = a tela precisa exibir (e exigir) o campo Celular.
+    needsPhone,
+    // Nome já digitado pelo Admin no convite — pré-preenche o campo para
+    // quem está criando a conta agora.
+    name: invite.name,
   };
 }
 
-export async function acceptInvite(token: string, authUserId: string) {
+export async function acceptInvite(
+  token: string,
+  authUserId: string,
+  // Preenchidos só quando a identidade está nascendo neste aceite (o
+  // convidado clicou no link sem ter conta). Ver gravação no Supabase logo
+  // abaixo da validação do convite.
+  profile?: { name?: string; phone?: string },
+) {
   const invite = await prisma.invite.findUnique({ where: { token } });
   if (!invite || invite.status !== "PENDENTE") {
     throw new NotFoundError("Convite inválido ou já utilizado.");
   }
   if (invite.expiresAt < new Date()) {
     throw new ConflictError("Este convite expirou. Peça ao Administrador para gerar um novo.");
+  }
+
+  // Celular é obrigatório para TODA identidade. Quem chega por convite sem
+  // ter conta cria a identidade aqui (a senha foi definida direto no
+  // Supabase pelo frontend), então este é o único ponto onde dá para cobrar
+  // o dado — sem isto, o convite seria uma porta de entrada para usuários
+  // sem celular, furando a regra que o cadastro público já cobra.
+  //
+  // Só cobramos de quem ainda não tem celular gravado: quem já tem conta
+  // está apenas entrando em mais uma empresa e não deve ser interrogado de
+  // novo.
+  const { data: identity } = await supabaseAdmin.auth.admin.getUserById(authUserId);
+  const currentMetadata = (identity?.user?.user_metadata ?? {}) as Record<string, unknown>;
+  const hasPhone = typeof currentMetadata.phone === "string" && currentMetadata.phone.length > 0;
+
+  if (!hasPhone) {
+    if (!profile?.phone) {
+      throw new ConflictError("Informe seu celular com DDD para concluir o cadastro.");
+    }
+    await supabaseAdmin.auth.admin.updateUserById(authUserId, {
+      user_metadata: {
+        ...currentMetadata,
+        // O nome do convite serve de fallback: o Admin já digitou um nome ao
+        // convidar, e ficar sem nome nenhum é pior do que herdá-lo.
+        name: profile.name?.trim() || (currentMetadata.name as string | undefined) || invite.name,
+        phone: profile.phone,
+      },
+    });
   }
 
   // O papel vem do Cargo do convite, não fixo em OPERACIONAL. Com o valor

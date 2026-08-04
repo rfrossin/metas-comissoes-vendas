@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { identityApi, getIdentityErrorMessage } from "@/services/identity-api";
 import { useIdentityStore } from "@/store/identity.store";
+import { isValidPhone, maskPhoneInput } from "@shared/utils/phone.util";
 
 // Primeiro passo do fluxo "identidade primeiro": cria-se o login, sem
 // empresa nenhuma. Entrar numa empresa (criando uma ou pedindo acesso a
@@ -12,6 +13,7 @@ export function CriarContaPage() {
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -21,6 +23,10 @@ export function CriarContaPage() {
     event.preventDefault();
     setError(null);
 
+    if (!isValidPhone(phone)) {
+      setError("Informe um celular válido com DDD, ex.: (16) 99229-6316.");
+      return;
+    }
     if (password.length < 8) {
       setError("A senha deve ter ao menos 8 caracteres.");
       return;
@@ -35,6 +41,7 @@ export function CriarContaPage() {
       const { data } = await identityApi.post<{ token: string; email: string }>("/identidade/cadastrar", {
         name,
         email,
+        phone,
         password,
       });
       setIdentity(data.token, data.email);
@@ -84,6 +91,23 @@ export function CriarContaPage() {
             autoComplete="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-sm text-foreground" htmlFor="phone">
+            Celular
+          </label>
+          <input
+            id="phone"
+            type="tel"
+            required
+            inputMode="numeric"
+            autoComplete="tel"
+            placeholder="(16) 99229-6316"
+            value={phone}
+            onChange={(event) => setPhone(maskPhoneInput(event.target.value))}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
           />
         </div>

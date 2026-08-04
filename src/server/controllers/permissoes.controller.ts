@@ -22,6 +22,7 @@ import {
 } from "../services/permissoes.service";
 import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from "../utils/http-errors";
 import { issueIdentityTokenForUser } from "../services/identity.service";
+import { phoneSchema } from "../utils/phone.schema";
 
 const scopeTypeSchema = z.enum(["EMPRESA", "CANAL", "DEPARTAMENTO", "TIME", "MEMBRO"]);
 const accessLevelSchema = z.enum(["VISUALIZAR", "EDITAR"]);
@@ -45,6 +46,12 @@ const acceptInviteSchema = z.object({
   // authUserId vem da sessão Supabase já estabelecida no frontend (o
   // usuário já definiu a senha pelo link do e-mail antes de chegar aqui).
   authUserId: z.string().min(1),
+  // Nome e celular só chegam quando a identidade está NASCENDO aqui (o
+  // convidado não tinha conta). Quem já tem conta entra em mais uma empresa
+  // e mantém os dados que já cadastrou — por isso opcionais no schema; o
+  // service é quem cobra a presença deles no caso de identidade nova.
+  name: z.string().trim().min(2, "Informe seu nome").optional(),
+  phone: phoneSchema.optional(),
 });
 
 const setUserActiveSchema = z.object({ isActive: z.boolean() });
@@ -152,7 +159,10 @@ export async function acceptInviteHandler(req: Request, res: Response) {
   if (!parsed.success) return badRequest(res, parsed.error.errors[0]?.message ?? "Dados inválidos");
 
   try {
-    const user = await acceptInvite(parsed.data.token, parsed.data.authUserId);
+    const user = await acceptInvite(parsed.data.token, parsed.data.authUserId, {
+      name: parsed.data.name,
+      phone: parsed.data.phone,
+    });
     res.status(201).json(user);
   } catch (error) {
     respondToError(error, res);

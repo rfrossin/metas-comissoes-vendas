@@ -3,10 +3,16 @@ import { useNavigate, useParams } from "react-router-dom";
 import { api, getErrorMessage } from "@/services/api";
 import { supabase } from "@/services/supabase";
 import { LoadingState } from "@/components/AsyncState";
+import { isValidPhone, maskPhoneInput } from "@shared/utils/phone.util";
 
 interface InviteInfo {
   email: string;
   companyName: string;
+  // Nome que o Admin digitou ao convidar — pré-preenche o campo.
+  name: string;
+  // true = esta identidade ainda não tem celular gravado (conta nova, ou
+  // conta antiga anterior à obrigatoriedade). A tela exibe e exige o campo.
+  needsPhone: boolean;
   // true = quem foi convidado JÁ tem login no sistema (está entrando em
   // mais uma empresa). Antes esta tela ignorava isso e mandava todo mundo
   // "definir uma senha": para quem já tinha conta, isso sobrescrevia a
@@ -28,6 +34,8 @@ export function AceitarConvitePage() {
 
   const [info, setInfo] = useState<InviteInfo | null>(null);
   const [infoError, setInfoError] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +47,11 @@ export function AceitarConvitePage() {
     api
       .get<InviteInfo>(`/auth/convite/${token}`)
       .then(({ data }) => {
-        if (isMounted) setInfo(data);
+        if (!isMounted) return;
+        setInfo(data);
+        // O Admin já digitou um nome ao convidar; a pessoa só corrige se
+        // estiver errado, em vez de redigitar do zero.
+        setName(data.name ?? "");
       })
       .catch((err) => {
         if (isMounted) setInfoError(getErrorMessage(err, "Convite inválido ou expirado."));
@@ -67,6 +79,19 @@ export function AceitarConvitePage() {
       }
     }
 
+    // Celular: cobrado de toda identidade que ainda não tem o dado, tenha
+    // ela conta ou não — é a regra de "todo usuário tem celular".
+    if (info.needsPhone) {
+      if (name.trim().length < 2) {
+        setError("Informe seu nome.");
+        return;
+      }
+      if (!isValidPhone(phone)) {
+        setError("Informe um celular válido com DDD, ex.: (16) 99229-6316.");
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     try {
       let authUserId: string;
@@ -88,7 +113,13 @@ export function AceitarConvitePage() {
         authUserId = data.user.id;
       }
 
-      await api.post("/auth/aceitar-convite", { token, authUserId });
+      await api.post("/auth/aceitar-convite", {
+        token,
+        authUserId,
+        // Só vão quando a tela realmente pediu — para quem já tem os dados,
+        // o backend ignora e preserva o que está gravado.
+        ...(info.needsPhone ? { name: name.trim(), phone } : {}),
+      });
       await supabase.auth.signOut();
 
       setIsDone(true);
@@ -165,6 +196,42 @@ export function AceitarConvitePage() {
         </div>
 
         {error && <p className="text-sm text-destructive">{error}</p>}
+
+        {info.needsPhone && (
+          <>
+            <div className="space-y-1">
+              <label className="text-sm text-foreground" htmlFor="name">
+                Nome
+              </label>
+              <input
+                id="name"
+                type="text"
+                required
+                autoComplete="name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm text-foreground" htmlFor="phone">
+                Celular
+              </label>
+              <input
+                id="phone"
+                type="tel"
+                required
+                inputMode="numeric"
+                autoComplete="tel"
+                placeholder="(16) 99229-6316"
+                value={phone}
+                onChange={(event) => setPhone(maskPhoneInput(event.target.value))}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+              />
+            </div>
+          </>
+        )}
 
         <div className="space-y-1">
           <label className="text-sm text-foreground" htmlFor="password">

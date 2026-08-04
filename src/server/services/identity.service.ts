@@ -35,6 +35,8 @@ interface SignUpInput {
   name: string;
   email: string;
   password: string;
+  // Só dígitos (DDD + número) — o controller já normalizou e validou.
+  phone: string;
 }
 
 // Cadastro público de IDENTIDADE — não cria Company nem User, de
@@ -53,7 +55,11 @@ export async function signUpIdentity(input: SignUpInput): Promise<{ token: strin
     email,
     password: input.password,
     email_confirm: true,
-    user_metadata: { name: input.name.trim() },
+    // phone vai em user_metadata, não no campo `phone` nativo do Supabase:
+    // aquele é o identificador de login por SMS e exige provider de SMS
+    // configurado (não temos) — usá-lo faria o createUser falhar. Aqui é só
+    // um dado de contato da pessoa, ao lado do nome.
+    user_metadata: { name: input.name.trim(), phone: input.phone },
     // memberships vazio = identidade sem empresa. É este array que o
     // login lê para decidir entre entrar direto, escolher empresa, ou
     // cair na tela "você ainda não tem empresa".
@@ -90,6 +96,7 @@ export interface IdentityCompanySummary {
 export async function getIdentityState(authUserId: string): Promise<{
   email: string;
   name: string;
+  phone: string;
   createdAt: string;
   companies: IdentityCompanySummary[];
 }> {
@@ -118,9 +125,14 @@ export async function getIdentityState(authUserId: string): Promise<{
       })
     : [];
 
+  const metadata = data.user.user_metadata as { name?: string; phone?: string } | null;
+
   return {
     email: data.user.email ?? "",
-    name: (data.user.user_metadata as { name?: string } | null)?.name ?? "",
+    name: metadata?.name ?? "",
+    // Vazio só para identidades anteriores ao backfill; o cadastro passou a
+    // exigir o celular, então toda conta nova nasce com ele preenchido.
+    phone: metadata?.phone ?? "",
     createdAt: data.user.created_at,
     companies: activeUsers.map((u) => ({
       companyId: u.companyId,
@@ -128,6 +140,38 @@ export async function getIdentityState(authUserId: string): Promise<{
       role: u.role,
     })),
   };
+}
+
+// Edição dos dados da PESSOA (nome e celular), feita pela própria pessoa
+// em /minha-conta. Vale para todas as empresas dela de uma vez — é esse o
+// ponto de o dado morar na identidade e não em cada linha de User.
+//
+// E-mail fica de fora de propósito: ele é a chave que identifica o usuário
+// (um usuário por e-mail) e trocá-lo mexe na credencial de login e nas
+// referências dos convites — é uma operação de outra natureza, não um
+// campo de perfil.
+export async function updateMyIdentity(
+  authUserId: string,
+  input: { name: string; phone: string },
+): Promise<{ name: string; phone: string }> {
+  const { data: current, error: readError } = await supabaseAdmin.auth.admin.getUserById(authUserId);
+  if (readError || !current.user) {
+    throw new UnauthorizedError("Sessão inválida. Faça login novamente.");
+  }
+
+  // Merge sobre o metadata existente: updateUserById SUBSTITUI o
+  // user_metadata inteiro, então mandar só {name, phone} apagaria qualquer
+  // outra chave que já estivesse gravada ali.
+  const metadata = (current.user.user_metadata ?? {}) as Record<string, unknown>;
+
+  const { data, error } = await supabaseAdmin.auth.admin.updateUserById(authUserId, {
+    user_metadata: { ...metadata, name: input.name.trim(), phone: input.phone },
+  });
+  if (error || !data.user) {
+    throw new Error(`Não foi possível salvar seus dados: ${error?.message ?? "erro desconhecido"}`);
+  }
+
+  return { name: input.name.trim(), phone: input.phone };
 }
 
 // Troca um token de TENANT válido por um de IDENTIDADE, sem pedir a senha

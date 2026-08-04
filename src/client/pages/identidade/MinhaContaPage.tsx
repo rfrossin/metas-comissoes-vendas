@@ -7,10 +7,12 @@ import { useAuthStore, PERMISSION_LEVEL_LABELS, type PermissionLevel } from "@/s
 import { ErrorState, LoadingState } from "@/components/AsyncState";
 import { SolicitarAcessoDialog } from "./SolicitarAcessoDialog";
 import { CriarEmpresaDialog } from "./CriarEmpresaDialog";
+import { MeusDadosCard } from "./MeusDadosCard";
 
 interface IdentityState {
   email: string;
   name: string;
+  phone: string;
   createdAt: string;
   companies: { companyId: string; companyName: string; role: PermissionLevel }[];
 }
@@ -108,6 +110,8 @@ export function MinhaContaPage() {
         {isError && <ErrorState onRetry={() => refetch()} />}
 
         {actionError && <p className="text-sm text-destructive">{actionError}</p>}
+
+        {data && <MeusDadosCard name={data.name} phone={data.phone} email={data.email} />}
 
         {/* Convites recebidos — primeiro por ser a ação mais imediata:
             alguém já liberou a entrada, basta confirmar. */}

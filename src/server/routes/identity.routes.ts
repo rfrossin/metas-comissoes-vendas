@@ -4,6 +4,7 @@ import {
   getIdentityStateHandler,
   listMyPendingInvitesHandler,
   signUpIdentityHandler,
+  updateMyIdentityHandler,
 } from "../controllers/identity.controller";
 import {
   listMyAccessRequestsHandler,
@@ -26,6 +27,8 @@ identityRoutes.post("/cadastrar", authRateLimiter, asyncHandler(signUpIdentityHa
 
 identityRoutes.use(identityAuthMiddleware);
 identityRoutes.get("/eu", asyncHandler(getIdentityStateHandler));
+// Dados da pessoa (nome + celular), válidos em todas as empresas dela.
+identityRoutes.patch("/eu", asyncHandler(updateMyIdentityHandler));
 
 // Entrar numa empresa existente pelo código que o Admin divulgou.
 identityRoutes.get("/empresa", asyncHandler(peekCompanyHandler));

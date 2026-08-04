@@ -5,7 +5,9 @@ import {
   getIdentityState,
   listMyPendingInvites,
   signUpIdentity,
+  updateMyIdentity,
 } from "../services/identity.service";
+import { phoneSchema } from "../utils/phone.schema";
 
 const signUpSchema = z.object({
   name: z.string().trim().min(2, "Informe seu nome"),
@@ -13,6 +15,7 @@ const signUpSchema = z.object({
   // 8 caracteres: mesmo mínimo cobrado na tela de aceite de convite
   // (AceitarConvitePage) — regras divergentes entre telas confundiriam.
   password: z.string().min(8, "A senha deve ter ao menos 8 caracteres"),
+  phone: phoneSchema,
 });
 
 export async function signUpIdentityHandler(req: Request, res: Response) {
@@ -35,6 +38,22 @@ export async function getIdentityStateHandler(req: Request, res: Response) {
 // depender exclusivamente do link do e-mail (que pode se perder no spam).
 export async function listMyPendingInvitesHandler(req: Request, res: Response) {
   res.json(await listMyPendingInvites(req.identity!.authUserId));
+}
+
+const updateMySchema = z.object({
+  name: z.string().trim().min(2, "Informe seu nome"),
+  phone: phoneSchema,
+});
+
+// Edita os dados da própria identidade. Não recebe authUserId do corpo: ele
+// vem do token (req.identity), senão qualquer um editaria o perfil alheio.
+export async function updateMyIdentityHandler(req: Request, res: Response) {
+  const parsed = updateMySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Dados inválidos" });
+    return;
+  }
+  res.json(await updateMyIdentity(req.identity!.authUserId, parsed.data));
 }
 
 const acceptInviteSchema = z.object({

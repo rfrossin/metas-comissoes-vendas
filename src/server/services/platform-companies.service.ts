@@ -40,6 +40,9 @@ export interface OrphanIdentity {
   authUserId: string;
   email: string;
   name: string;
+  // Celular (só dígitos) do user_metadata. Vazio nas identidades anteriores
+  // à obrigatoriedade do campo que ainda não passaram pelo backfill.
+  phone: string;
   // Data de cadastro da IDENTIDADE (auth.users.created_at no Supabase).
   // Não existe no nosso banco — a identidade é anterior a qualquer User.
   createdAt: string;
@@ -96,6 +99,7 @@ export async function listOrphanIdentities(): Promise<OrphanIdentity[]> {
       authUserId: user.id,
       email: user.email ?? "",
       name: (user.user_metadata as { name?: string } | null)?.name ?? "",
+      phone: (user.user_metadata as { phone?: string } | null)?.phone ?? "",
       createdAt: user.created_at,
       lastCompanyName: lastLeft?.company.name ?? null,
       lastLeftAt: lastLeft?.leftAt ?? null,
