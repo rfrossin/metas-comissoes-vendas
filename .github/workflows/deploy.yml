@@ -46,18 +46,41 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     steps:
+      # A chave é restrita via `command=` em authorized_keys no VPS — sempre
+      # executa /opt/metas/deploy.sh, independente do que for enviado aqui.
+      # Aquele script espera o healthcheck do container e sai com código != 0
+      # se ele não ficar saudável; a ssh-action propaga esse código, então
+      # este job fica VERMELHO num deploy quebrado (antes ficava verde com a
+      # API em 502).
+      #
+      # `timeout: 120s` (conexão) porque 2 de 6 falhas históricas foram
+      # "dial tcp :22: i/o timeout": o VPS é um KVM modesto e, quando está
+      # ocupado — justamente durante um build anterior —, demora mais que os
+      # 30s padrão só para aceitar a conexão. Não havia nada errado com o
+      # código nessas vezes.
       - name: Deploy via SSH
+        id: deploy
+        continue-on-error: true
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          # A chave é restrita via `command=` em authorized_keys no VPS —
-          # sempre executa /opt/metas/deploy.sh, independente do que for
-          # enviado aqui. Aquele script espera o healthcheck do container e
-          # sai com código != 0 se ele não ficar saudável; a ssh-action
-          # propaga esse código, então este job fica VERMELHO num deploy
-          # quebrado (antes ficava verde com a API em 502).
           script: echo "deploy triggered"
-          # O build no VPS leva alguns minutos; o padrão da action é menor.
           command_timeout: 10m
+          timeout: 120s
+
+      # Segunda tentativa só se a primeira falhou. Cobre a intermitência de
+      # rede sem mascarar problema real: o deploy.sh é idempotente (rebuild
+      # + up -d), e se o servidor estiver mesmo fora, esta também falha e o
+      # job fica vermelho.
+      - name: Deploy via SSH (retry)
+        if: steps.deploy.outcome == 'failure'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: echo "deploy retry"
+          command_timeout: 10m
+          timeout: 120s
