@@ -27,8 +27,14 @@ jobs:
 
       # Só os testes unitários — vitest.config.ts exclui os
       # *.integration.test.ts, que exigem Postgres.
+      #
+      # O env dummy é necessário porque vários testes importam services
+      # que puxam config/env.ts na cadeia, e ele faz throw se faltar
+      # qualquer variável. Localmente isso passa por causa do .env; no CI
+      # não existe .env, e sem isto 7 das 10 suítes falhavam só por
+      # configuração.
       - name: Testes unitários
-        run: npm test
+        run: . scripts/ci-env.sh && npm test
 
       # Reproduz o Docker (build limpo) e, sobretudo, EXECUTA o JS
       # compilado exigindo 200 em /health. É o que pega erro de runtime

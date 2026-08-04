@@ -13,21 +13,9 @@ export PORT
 
 # Env dummy: src/server/config/env.ts faz throw se faltar qualquer
 # variável, então sem isso o processo morre por configuração e não por um
-# problema real de build. Nada aqui toca o banco — /health não consulta o
-# Postgres, e o objetivo é só provar que os require() resolvem e o Express
-# sobe.
-export NODE_ENV=production
-export JWT_SECRET=smoke
-export DATABASE_URL=postgresql://u:p@127.0.0.1:5432/smoke
-export DIRECT_URL=postgresql://u:p@127.0.0.1:5432/smoke
-export DATABASE_URL_RESTRICTED=postgresql://u:p@127.0.0.1:5432/smoke
-export SUPABASE_URL=http://localhost
-export SUPABASE_SERVICE_ROLE_KEY=smoke
-export SUPABASE_ANON_KEY=smoke
-export SMTP_HOST=localhost
-export SMTP_USER=smoke
-export SMTP_PASSWORD=smoke
-export SMTP_FROM=smoke@example.com
+# problema real de build. Fonte única em ci-env.sh — duas listas
+# separadas divergiriam na primeira variável nova.
+. "$(dirname "$0")/ci-env.sh"
 # dotenv/config carregaria o .env real por cima das variáveis acima —
 # apontar para um caminho inexistente mantém o smoke isolado do ambiente
 # local (e do banco de produção configurado nele).
