@@ -6,8 +6,11 @@ dist
 .env.test
 src/client
 docs
+_local
 .claude
+.claudeignore
 .agents
 .impeccable
+.vercel
 *.tsbuildinfo
 supabase

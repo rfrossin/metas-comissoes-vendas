@@ -14,17 +14,14 @@ coverage/
 # Artefatos de build
 *.tsbuildinfo
 
-# Ferramentas de IA / ambiente local (não fazem parte do produto)
+# Tudo que é local e nunca sobe (ver MAPA.md)
+_local/
+
+# Ferramental de IA — precisa ficar na raiz por exigência das ferramentas
 .agents/
 .impeccable/
 .claude/
 .claudeignore
-skills-lock.json
-.planosistemametas
-
-# Lixo de automação
---full-page
-login_state
 
 # impeccable-live-ignore-start
 .impeccable/hook.cache.json

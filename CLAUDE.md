@@ -27,8 +27,16 @@
 ## Comportamento do Claude Code
 - Sempre execute o comando de testes (`npm run test`) após alterar qualquer serviço matemático para garantir que nenhuma regra pré-existente foi quebrada.
 - Se uma alteração quebrar um teste unitário, dê rollback na edição do arquivo imediatamente e reavalie a estratégia.
-- Antes de iniciar qualquer tarefa nova neste projeto, leia `.planosistemametas` e `SPECIFICATION.md` primeiro.
-- Ao concluir uma etapa do `.planosistemametas`, marque-a como (FEITO) e registre um resumo das mudanças de destaque.
-- O próximo passo a executar é sempre o primeiro item do `.planosistemametas` ainda não marcado como (FEITO).
+- Antes de iniciar qualquer tarefa nova neste projeto, leia `_local/plano/PLANO-MESTRE.md` e `docs/produto/SPECIFICATION.md` primeiro.
+- Ao concluir uma etapa do `_local/plano/PLANO-MESTRE.md`, marque-a como (FEITO) e registre um resumo das mudanças de destaque.
+- O próximo passo a executar é sempre o primeiro item do `_local/plano/PLANO-MESTRE.md` ainda não marcado como (FEITO).
 - Se o caminho percorrido exigir mudar os próximos passos ainda pendentes, avise o usuário e proponha o replanejamento antes de reescrevê-los.
+
+## Organização de Arquivos
+Ver `MAPA.md` na raiz para a tabela completa de "o que é cada coisa e para onde vai". Regras ao criar qualquer arquivo novo:
+- **Código que o sistema executa** → `src/` (`client/`, `server/` ou `shared/`). Nunca na raiz.
+- **Documentação para humano ou agente** → `docs/` (`produto/`, `design/` ou `historico/`). Nunca na raiz.
+- **Qualquer coisa que não deve subir ao GitHub** → `_local/` (a pasta inteira é gitignored). Nunca deixe arquivo local solto na raiz.
+- **A raiz é reservada** a arquivos de configuração que a ferramenta exige encontrar ali (`package.json`, `index.html`, `tsconfig*`, `vite.config.ts`, `Dockerfile`, `vercel.json`, `.env`, `CLAUDE.md`, `README.md`, `MAPA.md`). Não adicione nada à raiz sem essa exigência técnica.
+- Ao mover arquivos versionados, use `git mv` para preservar o histórico.
 

@@ -48,7 +48,7 @@ Hierarquia organizacional estrita Top-Down: Empresa → Canal → Departamento �
 
 ## Evidence on Hand
 
-Nenhum dado real de cliente, testemunho, case ou benchmark foi fornecido até o momento — trabalho futuro não deve fabricar nenhum desses. A evidência de produto disponível é a especificação funcional completa em `SPECIFICATION.md` e o histórico de decisões em `.planosistemametas`.
+Nenhum dado real de cliente, testemunho, case ou benchmark foi fornecido até o momento — trabalho futuro não deve fabricar nenhum desses. A evidência de produto disponível é a especificação funcional completa em `SPECIFICATION.md` (mesma pasta) e o histórico de decisões em `_local/plano/PLANO-MESTRE.md`.
 
 ## Product Principles
 
