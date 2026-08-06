@@ -16,6 +16,16 @@ const envSchema = z.object({
   // URL pública do front-end (Vite em dev, domínio real em produção) — usada
   // para montar os links de convite/aprovação enviados por e-mail.
   FRONTEND_URL: z.string().min(1).default("http://localhost:5173"),
+  // Origins aceitas pelo CORS, separadas por vírgula. Vazio = só a
+  // FRONTEND_URL, que é o comportamento de produção (uma origin só).
+  //
+  // Existe porque FRONTEND_URL acumulava dois papéis distintos: montar link
+  // de e-mail E autorizar o CORS. Em dev isso quebrava a app inteira ao
+  // abrir o build de preview (vite preview, porta 4173) em vez do dev
+  // server (5173): o navegador recebia Access-Control-Allow-Origin da
+  // outra porta e descartava TODA resposta da API, o que na tela parecia
+  // "não foi possível carregar os dados" solto em alguns blocos.
+  CORS_ORIGINS: z.string().optional(),
   // SMTP próprio (Resend ou similar) — o backend envia e-mail diretamente via
   // nodemailer em vez de depender do envio automático do Supabase Auth, que
   // tem rate limit baixo e não é suportado para produção.
@@ -45,6 +55,19 @@ export const env = {
   supabaseServiceRoleKey: parsed.data.SUPABASE_SERVICE_ROLE_KEY,
   supabaseAnonKey: parsed.data.SUPABASE_ANON_KEY,
   frontendUrl: parsed.data.FRONTEND_URL,
+  // Sempre inclui frontendUrl: quem não configurar CORS_ORIGINS mantém
+  // exatamente o comportamento anterior. Dedup para não repetir a origin
+  // caso ela também apareça na lista.
+  corsOrigins: Array.from(
+    new Set(
+      [
+        parsed.data.FRONTEND_URL,
+        ...(parsed.data.CORS_ORIGINS?.split(",") ?? []),
+      ]
+        .map((origin) => origin.trim())
+        .filter((origin) => origin.length > 0),
+    ),
+  ),
   smtpHost: parsed.data.SMTP_HOST,
   smtpPort: parsed.data.SMTP_PORT,
   smtpUser: parsed.data.SMTP_USER,

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, getErrorMessage } from "@/services/api";
-import { ErrorState, LoadingState } from "@/components/AsyncState";
+import { ERROR_TEXT, ErrorState, LoadingState } from "@/components/AsyncState";
 
 interface AccessRequest {
   id: string;
@@ -86,7 +86,12 @@ export function CodigoConviteCard() {
       {actionError && <p className="text-sm text-destructive">{actionError}</p>}
 
       {codeQuery.isLoading && <LoadingState />}
-      {codeQuery.isError && <ErrorState onRetry={() => codeQuery.refetch()} />}
+      {codeQuery.isError && (
+        <ErrorState
+          message={getErrorMessage(codeQuery.error, ERROR_TEXT)}
+          onRetry={() => codeQuery.refetch()}
+        />
+      )}
 
       {codeQuery.data && (
         <div className="flex flex-wrap items-center gap-2">
@@ -143,7 +148,12 @@ export function CodigoConviteCard() {
         </h4>
 
         {requestsQuery.isLoading && <LoadingState />}
-        {requestsQuery.isError && <ErrorState onRetry={() => requestsQuery.refetch()} />}
+        {requestsQuery.isError && (
+          <ErrorState
+            message={getErrorMessage(requestsQuery.error, ERROR_TEXT)}
+            onRetry={() => requestsQuery.refetch()}
+          />
+        )}
 
         {requestsQuery.data && pending.length === 0 && (
           <p className="text-sm text-muted-foreground">Nenhum pedido pendente.</p>

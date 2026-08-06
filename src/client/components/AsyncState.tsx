@@ -16,10 +16,23 @@ export function LoadingState({ className = "text-sm text-muted-foreground" }: { 
 // Estado de erro com ação de recuperação — o botão é essencial: numa
 // oscilação de rede (mobile), o usuário precisa de um caminho de volta que
 // não seja recarregar a página inteira.
-export function ErrorState({ onRetry, className = "text-sm text-destructive" }: { onRetry: () => void; className?: string }) {
+// `message` é opcional de propósito: sem ela o componente segue exibindo o
+// ERROR_TEXT genérico, então nenhum uso existente muda. Quem tem uma
+// mensagem melhor do servidor (via getErrorMessage) passa adiante — sem
+// isso, um 403 de permissão, uma empresa bloqueada e uma falha de rede
+// ficam indistinguíveis na tela, o que já custou caro para diagnosticar.
+export function ErrorState({
+  onRetry,
+  message,
+  className = "text-sm text-destructive",
+}: {
+  onRetry: () => void;
+  message?: string;
+  className?: string;
+}) {
   return (
     <p className={className}>
-      {ERROR_TEXT}{" "}
+      {message ?? ERROR_TEXT}{" "}
       <button type="button" onClick={onRetry} className="font-medium underline underline-offset-2 hover:no-underline">
         {RETRY_TEXT}
       </button>

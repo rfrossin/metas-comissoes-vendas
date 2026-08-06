@@ -22,9 +22,13 @@ export const app = express();
 app.set("trust proxy", 1);
 
 app.use(helmet());
-// Restrito à origin do front — a auth usa header Authorization (não
-// cookie), então não há necessidade de credentials: true.
-app.use(cors({ origin: env.frontendUrl }));
+// Restrito às origins do front — a auth usa header Authorization (não
+// cookie), então não há necessidade de credentials: true. Em produção a
+// lista tem um item só (FRONTEND_URL); CORS_ORIGINS existe para o dev
+// poder abrir o build de preview (4173) além do dev server (5173) sem que
+// o navegador descarte toda resposta da API. Continua fail-closed:
+// origin fora da lista não recebe o header e é bloqueada pelo navegador.
+app.use(cors({ origin: env.corsOrigins }));
 app.use(express.json());
 
 // Pública, sem auth — usada pelo healthcheck do Docker/Caddy para saber se

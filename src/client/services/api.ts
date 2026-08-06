@@ -54,5 +54,16 @@ export function getErrorMessage(error: unknown, fallback: string): string {
     return error.response.data.message;
   }
 
+  // Sem `response` o servidor não respondeu OU o navegador descartou a
+  // resposta antes do JS (CORS, servidor fora do ar, DNS). Vale distinguir
+  // de um erro de regra de negócio: o texto genérico fazia uma falha de
+  // conexão parecer "esta tela está quebrada", enquanto a ação certa é
+  // checar se a API está no ar e na origin esperada.
+  if (isAxiosError(error) && !error.response) {
+    return error.code === "ECONNABORTED"
+      ? "O servidor demorou demais para responder. Tente novamente."
+      : "Não foi possível falar com o servidor. Verifique sua conexão e tente novamente.";
+  }
+
   return fallback;
 }
