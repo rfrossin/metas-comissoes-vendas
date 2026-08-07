@@ -22,6 +22,9 @@ interface ManagedMember {
   status: "ATIVO" | "INATIVO";
   memberType: MemberType;
   customFixedSalary: string | null;
+  // ISO vindo da API (DATE no banco); a UI usa só a parte AAAA-MM-DD.
+  entryDate: string | null;
+  exitDate: string | null;
   cargo: { id: string; name: string };
   team: {
     id: string;
@@ -62,6 +65,21 @@ function toLeadershipTargets(entries: NodeResponsibleForEntry[]): LeadershipTarg
 function formatSalary(value: string | null): string {
   if (value == null) return "Padrão do cargo";
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number(value));
+}
+
+// A API devolve DATE como ISO ("2026-03-01T00:00:00.000Z"); o <input
+// type="date"> e o backend trabalham com AAAA-MM-DD. Cortar a string (em vez
+// de usar new Date) evita o clássico deslocamento de um dia por fuso.
+function toDateInputValue(value: string | null): string | null {
+  return value ? value.slice(0, 10) : null;
+}
+
+function formatEmployment(member: ManagedMember): string {
+  const entry = toDateInputValue(member.entryDate);
+  const exit = toDateInputValue(member.exitDate);
+  if (!entry && !exit) return "—";
+  const format = (iso: string) => iso.split("-").reverse().join("/");
+  return `${entry ? format(entry) : "—"} → ${exit ? format(exit) : "atual"}`;
 }
 
 const TYPE_LABELS: Record<MemberType, string> = { OPERADOR: "Operador", GESTOR: "Gestor" };
@@ -108,6 +126,8 @@ export function MembrosTab() {
         memberType: values.memberType,
         customFixedSalary: values.customFixedSalary,
         leaderships: values.leaderships,
+        entryDate: values.entryDate,
+        exitDate: values.exitDate,
       }),
     onSuccess: () => {
       invalidate();
@@ -126,6 +146,8 @@ export function MembrosTab() {
         customFixedSalary: values.customFixedSalary,
         status: values.status,
         leaderships: values.leaderships,
+        entryDate: values.entryDate,
+        exitDate: values.exitDate,
       }),
     onSuccess: () => {
       invalidate();
@@ -144,6 +166,10 @@ export function MembrosTab() {
         customFixedSalary: member.customFixedSalary != null ? Number(member.customFixedSalary) : null,
         status: member.status === "ATIVO" ? "INATIVO" : "ATIVO",
         leaderships: toLeadershipTargets(member.nodeResponsibleFor),
+        // Reenviados sem alteração: o PUT substitui o Membro inteiro, então
+        // omitir as datas aqui apagaria o vínculo ao ativar/desativar.
+        entryDate: toDateInputValue(member.entryDate),
+        exitDate: toDateInputValue(member.exitDate),
       }),
     onSuccess: () => {
       invalidate();
@@ -243,6 +269,8 @@ export function MembrosTab() {
             status: editingMember.status,
             customFixedSalary: editingMember.customFixedSalary != null ? Number(editingMember.customFixedSalary) : null,
             leaderships: toLeadershipTargets(editingMember.nodeResponsibleFor),
+            entryDate: toDateInputValue(editingMember.entryDate),
+            exitDate: toDateInputValue(editingMember.exitDate),
           }}
           submitLabel="Salvar"
           onSubmit={(values) => updateMutation.mutate({ id: editingMember.id, values })}
@@ -275,6 +303,7 @@ export function MembrosTab() {
               <th className="px-3 py-1.5">Cargo</th>
               <th className="px-3 py-1.5">Hierarquia</th>
               <th className="px-3 py-1.5">Salário</th>
+              <th className="px-3 py-1.5">Vínculo</th>
               <th className="px-3 py-1.5">Tipo</th>
               <th className="px-3 py-1.5">Status</th>
               <th className="px-3 py-1.5">Ações</th>
@@ -283,14 +312,14 @@ export function MembrosTab() {
           <tbody>
             {isLoading && (
               <tr>
-                <td colSpan={7} className="px-3 py-2 text-muted-foreground">
+                <td colSpan={8} className="px-3 py-2 text-muted-foreground">
                   Carregando...
                 </td>
               </tr>
             )}
             {!isLoading && filteredMembers.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-2 text-muted-foreground">
+                <td colSpan={8} className="px-3 py-2 text-muted-foreground">
                   Nenhum Membro encontrado.
                 </td>
               </tr>
@@ -308,6 +337,7 @@ export function MembrosTab() {
                     </div>
                   </td>
                   <td className="px-3 py-1.5">{formatSalary(member.customFixedSalary)}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap">{formatEmployment(member)}</td>
                   <td className="px-3 py-1.5">{TYPE_LABELS[member.memberType]}</td>
                   <td className="px-3 py-1.5">
                     {member.status === "ATIVO" ? (

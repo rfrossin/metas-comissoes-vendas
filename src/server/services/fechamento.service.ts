@@ -5,9 +5,19 @@ import { toDate } from "./resultados.service";
 import { buildHierarchyPath, resolveAncestorIds } from "./metas.service";
 import { buildMemberScopeFilter } from "./bases-metas.service";
 import { resolveFixedSalary } from "./cargos.service";
-import { computeMemberReceivablesRows, type MemberReceivableRow } from "./recebiveis.service";
+import {
+  computeMemberReceivablesRows,
+  employmentOverlapFilter,
+  overlapsEmployment,
+  type MemberReceivableRow,
+} from "./recebiveis.service";
 import type { TierPayoutBreakdown } from "./bases-recebiveis.service";
-import { assertNativeVisibleMembers, resolveNativeVisibleMemberFilter, resolveRequesterMemberId, type RequestingUser } from "./scope.util";
+import {
+  assertNativeVisibleMembers,
+  assertNotSelfManaging,
+  resolveNativeVisibleMemberFilter,
+  type RequestingUser,
+} from "./scope.util";
 
 // "Abrir/Fechar Mês" (CommercialPeriod) é a trava de escrita em Resultados
 // da empresa inteira — sem Membro pra escopar, continua exclusiva do
@@ -45,12 +55,15 @@ function assertCanViewFechamento(_requestingUser: RequestingUser) {
 // em getClosingDetail, sem essa checagem), mas não pode Fechar nem Reabrir
 // o próprio benefício — só um Administrador fecha/reabre o benefício de um
 // Gestor. Não se aplica a Membros comuns dentro da hierarquia liderada.
+// Delega para o helper compartilhado (scope.util) para que Fechamento e
+// Bases de Recebível apliquem exatamente a mesma regra.
 async function assertNotSelfClosing(companyId: string, requestingUser: RequestingUser, targetMemberId: string) {
-  if (requestingUser.role === "ADMINISTRADOR") return;
-  const ownMemberId = await resolveRequesterMemberId(companyId, requestingUser);
-  if (ownMemberId && ownMemberId === targetMemberId) {
-    throw new ForbiddenError("Você não pode fechar/reabrir o seu próprio benefício. Peça a um Administrador.");
-  }
+  await assertNotSelfManaging(
+    companyId,
+    requestingUser,
+    [targetMemberId],
+    "Você não pode fechar/reabrir o seu próprio benefício. Peça a um Administrador.",
+  );
 }
 
 export function firstDayOfMonthUtc(date: Date): Date {
@@ -278,6 +291,8 @@ async function resolveEligibleMembers(
   companyId: string,
   requestingUser: RequestingUser,
   filters: Pick<ClosingListFilters, "entityType" | "entityIds" | "cargoId" | "search">,
+  periodStart: Date,
+  periodEndExclusive: Date,
 ) {
   const scopeWhere: Prisma.MemberWhereInput =
     filters.entityType === "EMPRESA"
@@ -288,10 +303,15 @@ async function resolveEligibleMembers(
 
   const visibilityFilter = await resolveNativeVisibleMemberFilter(companyId, requestingUser);
 
+  // Membro sem nenhuma interseção com o intervalo consultado não tem
+  // Fechamento nenhum a exibir — some da lista inteira, em vez de aparecer
+  // com linhas zeradas.
+  const employmentWhere = employmentOverlapFilter(periodStart, periodEndExclusive);
+
   return prisma.member.findMany({
     where: {
       companyId,
-      AND: visibilityFilter === "ALL" ? [scopeWhere] : [scopeWhere, visibilityFilter],
+      AND: visibilityFilter === "ALL" ? [scopeWhere, employmentWhere] : [scopeWhere, visibilityFilter, employmentWhere],
       ...(filters.cargoId ? { cargoId: filters.cargoId } : {}),
       ...(filters.search ? { fullName: { contains: filters.search, mode: "insensitive" as const } } : {}),
     },
@@ -300,6 +320,8 @@ async function resolveEligibleMembers(
       fullName: true,
       customFixedSalary: true,
       teamId: true,
+      entryDate: true,
+      exitDate: true,
       cargo: { select: { id: true, name: true, defaultFixedSalary: true } },
     },
   });
@@ -308,15 +330,15 @@ async function resolveEligibleMembers(
 export async function listClosings(companyId: string, requestingUser: RequestingUser, filters: ClosingListFilters): Promise<ClosingListRow[]> {
   assertCanViewFechamento(requestingUser);
 
-  const members = await resolveEligibleMembers(companyId, requestingUser, filters);
-  const membersWithCargo = members.filter((m): m is typeof m & { cargo: NonNullable<(typeof m)["cargo"]> } => m.cargo !== null);
-  if (membersWithCargo.length === 0) return [];
-
   const rangeStart = toDate(filters.periodStart);
   const rangeEnd = toDate(filters.periodEnd);
   const rangeEndExclusive = firstDayOfNextMonthUtc(rangeEnd);
   const months = monthsInRange(rangeStart, rangeEnd);
   const referenceDate = new Date();
+
+  const members = await resolveEligibleMembers(companyId, requestingUser, filters, rangeStart, rangeEndExclusive);
+  const membersWithCargo = members.filter((m): m is typeof m & { cargo: NonNullable<(typeof m)["cargo"]> } => m.cargo !== null);
+  if (membersWithCargo.length === 0) return [];
 
   const existingClosings = await prisma.memberClosing.findMany({
     where: {
@@ -348,6 +370,15 @@ export async function listClosings(companyId: string, requestingUser: Requesting
     }
 
     for (const month of months) {
+      // Meses fora do vínculo (antes da entrada / depois da saída) não
+      // geram linha — o Membro só tem Fechamento enquanto esteve na
+      // empresa. Um Fechamento já salvo continua aparecendo mesmo assim:
+      // é histórico consumado, e escondê-lo sumiria com dado financeiro
+      // real (ex: rescisão lançada depois do mês já fechado).
+      if (!closingByKey.has(`${member.id}:${monthKeyOf(month)}`) && !overlapsEmployment(member, month, firstDayOfNextMonthUtc(month))) {
+        continue;
+      }
+
       const key = `${member.id}:${monthKeyOf(month)}`;
       const saved = closingByKey.get(key);
 

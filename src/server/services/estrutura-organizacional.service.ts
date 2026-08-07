@@ -93,6 +93,8 @@ export async function listMembersForManagement(companyId: string, requestingUser
     orderBy: { fullName: "asc" },
     include: {
       cargo: { select: { id: true, name: true } },
+      // entryDate/exitDate vêm por padrão (include, não select) — a UI de
+      // gestão precisa deles para editar o vínculo do Membro.
       team: {
         select: {
           id: true,
@@ -409,6 +411,8 @@ interface MemberCreateInput {
   memberType: MemberType;
   customFixedSalary: number | null;
   leaderships: LeadershipTarget[];
+  entryDate: string | null;
+  exitDate: string | null;
 }
 
 interface MemberUpdateInput {
@@ -418,6 +422,27 @@ interface MemberUpdateInput {
   customFixedSalary: number | null;
   status: MemberStatus;
   leaderships: LeadershipTarget[];
+  entryDate: string | null;
+  exitDate: string | null;
+}
+
+// Datas de vínculo empregatício (entrada/saída na empresa) — delimitam os
+// Recebíveis e Fechamentos do Membro. Guardadas como DATE puro (meia-noite
+// UTC), sem hora nem fuso: são datas de calendário do RH, e converter com
+// fuso local faria a data "andar" um dia dependendo de onde o usuário está.
+function parseEmploymentDate(value: string | null): Date | null {
+  return value ? new Date(`${value}T00:00:00.000Z`) : null;
+}
+
+function resolveEmploymentDates(input: { entryDate: string | null; exitDate: string | null }) {
+  const entryDate = parseEmploymentDate(input.entryDate);
+  const exitDate = parseEmploymentDate(input.exitDate);
+
+  if (entryDate && exitDate && exitDate < entryDate) {
+    throw new ConflictError("A data de Saída não pode ser anterior à data de Entrada.");
+  }
+
+  return { entryDate, exitDate };
 }
 
 async function assertCargoBelongsToCompany(companyId: string, cargoId: string) {
@@ -502,6 +527,7 @@ export async function createMember(companyId: string, requestingUser: Requesting
   await assertCargoBelongsToCompany(companyId, data.cargoId);
   const leaderships = data.memberType === "GESTOR" ? data.leaderships : [];
   const leadershipRows = await resolveLeadershipRows(companyId, requestingUser, leaderships);
+  const { entryDate, exitDate } = resolveEmploymentDates(data);
 
   return withTenant(async (tx) => {
     const member = await tx.member.create({
@@ -512,6 +538,8 @@ export async function createMember(companyId: string, requestingUser: Requesting
         cargoId: data.cargoId,
         memberType: data.memberType,
         customFixedSalary: data.customFixedSalary,
+        entryDate,
+        exitDate,
       },
       include: { cargo: { select: { id: true, name: true } } },
     });
@@ -550,6 +578,7 @@ export async function updateMember(companyId: string, requestingUser: Requesting
 
   const leaderships = data.memberType === "GESTOR" ? data.leaderships : [];
   const leadershipRows = await resolveLeadershipRows(companyId, requestingUser, leaderships);
+  const { entryDate, exitDate } = resolveEmploymentDates(data);
 
   return withTenant(async (tx) => {
     const updated = await tx.member.update({
@@ -560,6 +589,8 @@ export async function updateMember(companyId: string, requestingUser: Requesting
         memberType: data.memberType,
         customFixedSalary: data.customFixedSalary,
         status: data.status,
+        entryDate,
+        exitDate,
         ...(data.status === "INATIVO" && member.status === "ATIVO" ? { inactivatedAt: new Date() } : {}),
       },
       include: { cargo: { select: { id: true, name: true } } },

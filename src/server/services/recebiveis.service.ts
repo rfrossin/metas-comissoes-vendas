@@ -1,5 +1,5 @@
 import { prisma } from "../config/prisma";
-import { Prisma, type OrgScopeType, type ReceivablesPeriodicity, type RewardType } from "@prisma/client";
+import { Prisma, type BenefitApprovalStatus, type OrgScopeType, type ReceivablesPeriodicity, type RewardType } from "@prisma/client";
 import { NotFoundError } from "../utils/http-errors";
 import { toDate } from "./resultados.service";
 import { isoKey, monthKeyOf } from "./metas.service";
@@ -26,6 +26,43 @@ function addDaysUtc(date: Date, amount: number): Date {
 // deste arquivo) — mesma implementação trivial de 1 linha.
 function firstDayOfMonthUtc(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
+// ============================================================
+// Vínculo empregatício (regra confirmada em 2026-08-06): o Membro só tem
+// Recebíveis e Fechamentos dentro de [entryDate, exitDate]. Mora aqui (e
+// não em scope.util.ts) porque é regra de NEGÓCIO do cálculo financeiro,
+// não de permissão de acesso — quem está fora da janela não é "proibido de
+// ver", simplesmente não tem valor a apurar naquele período.
+//
+// Ambas as pontas são opcionais: sem entryDate o vínculo vale desde sempre,
+// sem exitDate ele segue aberto. As comparações usam as datas puras (a
+// coluna é DATE, sem hora), e a janela é fechada nas duas pontas —
+// trabalhar no próprio dia da entrada ou da saída conta.
+// ============================================================
+
+export interface MemberEmploymentWindow {
+  entryDate: Date | null;
+  exitDate: Date | null;
+}
+
+// A janela [periodStart, periodEndExclusive) tem alguma interseção com o
+// vínculo do Membro? Usado para decidir se o Membro entra na apuração.
+export function overlapsEmployment(member: MemberEmploymentWindow, periodStart: Date, periodEndExclusive: Date): boolean {
+  if (member.entryDate && member.entryDate >= periodEndExclusive) return false;
+  if (member.exitDate && member.exitDate < periodStart) return false;
+  return true;
+}
+
+// Filtro Prisma equivalente a overlapsEmployment — para não trazer do banco
+// Membros que já sabemos estar fora da janela.
+export function employmentOverlapFilter(periodStart: Date, periodEndExclusive: Date): Prisma.MemberWhereInput {
+  return {
+    AND: [
+      { OR: [{ entryDate: null }, { entryDate: { lt: periodEndExclusive } }] },
+      { OR: [{ exitDate: null }, { exitDate: { gte: periodStart } }] },
+    ],
+  };
 }
 
 // ============================================================
@@ -68,6 +105,10 @@ export interface ClosingSnapshotContext {
       blockedReason: string | null;
       payoutValue: Prisma.Decimal;
       physicalPrizeDescription: string | null;
+      // Decisão do gestor no Fechamento: um benefício REPROVADO não é pago,
+      // mesmo tendo payoutValue calculado. Precisa chegar até aqui para que
+      // Recebíveis mostre exatamente o que o Fechamento decidiu.
+      approvalStatus: BenefitApprovalStatus;
     }
   >;
 }
@@ -111,6 +152,7 @@ export async function loadClosingSnapshotContext(
         blockedReason: snapshot.blockedReason,
         payoutValue: snapshot.payoutValue,
         physicalPrizeDescription: snapshot.physicalPrizeDescription,
+        approvalStatus: snapshot.approvalStatus,
       });
     }
   }
@@ -148,20 +190,38 @@ export interface MemberLite {
   id: string;
   fullName: string;
   customFixedSalary: Prisma.Decimal | null;
+  entryDate: Date | null;
+  exitDate: Date | null;
   cargo: { id: string; name: string; defaultFixedSalary: Prisma.Decimal } | null;
 }
 
-async function resolveSelectedMembers(companyId: string, entityType: OrgScopeType, entityIds: string[]): Promise<MemberLite[]> {
-  const where: Prisma.MemberWhereInput =
+async function resolveSelectedMembers(
+  companyId: string,
+  entityType: OrgScopeType,
+  entityIds: string[],
+  periodStart: Date,
+  periodEndExclusive: Date,
+): Promise<MemberLite[]> {
+  const scopeWhere: Prisma.MemberWhereInput =
     entityType === "EMPRESA"
-      ? { companyId }
+      ? {}
       : entityType === "MEMBRO"
-        ? { companyId, id: { in: entityIds } }
-        : { companyId, OR: entityIds.map((id) => buildMemberScopeFilter(entityType, id)) };
+        ? { id: { in: entityIds } }
+        : { OR: entityIds.map((id) => buildMemberScopeFilter(entityType, id)) };
 
   return prisma.member.findMany({
-    where,
-    select: { id: true, fullName: true, customFixedSalary: true, cargo: { select: { id: true, name: true, defaultFixedSalary: true } } },
+    // Quem não esteve na empresa em nenhum momento do período consultado
+    // não tem Recebível a apurar (vínculo empregatício — ver
+    // employmentOverlapFilter).
+    where: { companyId, AND: [scopeWhere, employmentOverlapFilter(periodStart, periodEndExclusive)] },
+    select: {
+      id: true,
+      fullName: true,
+      customFixedSalary: true,
+      entryDate: true,
+      exitDate: true,
+      cargo: { select: { id: true, name: true, defaultFixedSalary: true } },
+    },
   });
 }
 
@@ -256,6 +316,14 @@ export async function computeMemberReceivablesRows(
         // recalculados, mesmo que Cargo/Member/regras da Base tenham mudado
         // depois do Fechamento (mesmo padrão de getClosingDetail).
         const topAchieved = frozen.tierBreakdown[frozen.tierBreakdown.length - 1] ?? null;
+
+        // Benefício REPROVADO no Fechamento não é pago: Recebíveis precisa
+        // refletir a decisão do gestor, não o valor que o motor calculou
+        // antes dela. Sem isto, reprovar uma campanha zerava o valor no
+        // Fechamento mas ele continuava aparecendo (e somando) em
+        // Recebíveis — exatamente a divergência que a trava de
+        // congelamento existe para evitar.
+        const reproved = frozen.approvalStatus === "REPROVADO";
         rows.push({
           receivablesBaseId: base.id,
           baseName: base.name,
@@ -269,10 +337,10 @@ export async function computeMemberReceivablesRows(
           attainmentValue: frozen.attainmentPercentage ?? frozen.realizedNetValue,
           mainRealized: frozen.realizedNetValue,
           currentTierLabel: topAchieved ? `Gatilho ${topAchieved.order}` : null,
-          eligible: frozen.eligibilityStatus,
-          blockedReason: frozen.blockedReason,
-          payoutValue: frozen.payoutValue,
-          physicalPrizeDescription: frozen.physicalPrizeDescription,
+          eligible: frozen.eligibilityStatus && !reproved,
+          blockedReason: reproved ? "Benefício reprovado no Fechamento do período." : frozen.blockedReason,
+          payoutValue: reproved ? new Prisma.Decimal(0) : frozen.payoutValue,
+          physicalPrizeDescription: reproved ? null : frozen.physicalPrizeDescription,
           // "Próximo degrau"/"potencial" são projeção de janela em
           // andamento — sem sentido para um período já fechado.
           nextTierGap: null,
@@ -391,13 +459,13 @@ export async function getReceivablesOverview(
   requestingUser: { id: string; companyId: string; role: string },
   filters: RecebiveisFilters,
 ) {
-  const members = await resolveSelectedMembers(companyId, filters.entityType, filters.entityIds);
-  const memberIds = members.map((m) => m.id);
-  await assertCanViewMembers(companyId, requestingUser, memberIds);
-
   const periodStart = toDate(filters.periodStart);
   const periodEndExclusive = addDaysUtc(toDate(filters.periodEnd), 1);
   const referenceDate = new Date();
+
+  const members = await resolveSelectedMembers(companyId, filters.entityType, filters.entityIds, periodStart, periodEndExclusive);
+  const memberIds = members.map((m) => m.id);
+  await assertCanViewMembers(companyId, requestingUser, memberIds);
 
   const snapshotContext = await loadClosingSnapshotContext(companyId, memberIds, periodStart, periodEndExclusive);
 

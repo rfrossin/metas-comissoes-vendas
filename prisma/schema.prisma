@@ -402,6 +402,14 @@ model Member {
   memberType        MemberType   @default(OPERADOR)
   customFixedSalary Decimal?     @db.Decimal(14, 2)
   inactivatedAt     DateTime?
+  // Vínculo empregatício do Membro (regra confirmada em 2026-08-06): o
+  // Membro só tem RECEBÍVEIS e FECHAMENTOS a partir de entryDate e até
+  // exitDate. Ambas opcionais: sem entryDate, vale desde sempre; sem
+  // exitDate, o vínculo segue aberto. São datas de NEGÓCIO (admissão/
+  // desligamento), distintas de inactivatedAt, que é o carimbo técnico de
+  // quando o cadastro foi inativado no sistema.
+  entryDate         DateTime?    @db.Date
+  exitDate          DateTime?    @db.Date
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
 

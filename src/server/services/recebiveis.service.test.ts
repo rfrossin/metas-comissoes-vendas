@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Prisma } from "@prisma/client";
 import {
+  overlapsEmployment,
   resolveMonthlyFixedSalary,
   resolveWindowStatus,
   windowSnapshotKey,
@@ -29,6 +30,8 @@ function member(overrides: Partial<MemberLite> = {}): MemberLite {
     id: "member-1",
     fullName: "João",
     customFixedSalary: null,
+    entryDate: null,
+    exitDate: null,
     cargo: { id: "cargo-1", name: "Vendedor", defaultFixedSalary: new Prisma.Decimal(4000) },
     ...overrides,
   };
@@ -112,5 +115,60 @@ describe("resolveMonthlyFixedSalary — Fixo congelado no Fechamento vs. ao vivo
     const m = member({ cargo: null });
     const value = resolveMonthlyFixedSalary(m, "2026-01", emptyContext());
     expect(value.toString()).toBe("0");
+  });
+});
+
+// Regra confirmada com o usuário (2026-08-06): o Membro só tem Recebíveis e
+// Fechamentos entre a data de ENTRADA e a de SAÍDA da empresa.
+describe("overlapsEmployment — vínculo empregatício delimita Recebíveis/Fechamentos", () => {
+  const marco = { start: utc("2026-03-01"), endExclusive: utc("2026-04-01") };
+
+  it("Membro sem entrada nem saída (vínculo aberto dos dois lados) entra em qualquer período", () => {
+    expect(overlapsEmployment(member(), marco.start, marco.endExclusive)).toBe(true);
+  });
+
+  it("mês ANTERIOR à entrada não conta — o Membro ainda não tinha sido admitido", () => {
+    const m = member({ entryDate: utc("2026-05-10") });
+    expect(overlapsEmployment(m, marco.start, marco.endExclusive)).toBe(false);
+  });
+
+  it("mês POSTERIOR à saída não conta — o Membro já havia sido desligado", () => {
+    const m = member({ exitDate: utc("2026-01-31") });
+    expect(overlapsEmployment(m, marco.start, marco.endExclusive)).toBe(false);
+  });
+
+  it("mês em que o Membro foi admitido no meio conta (interseção parcial)", () => {
+    const m = member({ entryDate: utc("2026-03-20") });
+    expect(overlapsEmployment(m, marco.start, marco.endExclusive)).toBe(true);
+  });
+
+  it("mês em que o Membro foi desligado no meio conta (interseção parcial)", () => {
+    const m = member({ exitDate: utc("2026-03-10") });
+    expect(overlapsEmployment(m, marco.start, marco.endExclusive)).toBe(true);
+  });
+
+  it("admissão no ÚLTIMO dia do período conta — trabalhou o dia da entrada", () => {
+    const m = member({ entryDate: utc("2026-03-31") });
+    expect(overlapsEmployment(m, marco.start, marco.endExclusive)).toBe(true);
+  });
+
+  it("desligamento no PRIMEIRO dia do período conta — trabalhou o dia da saída", () => {
+    const m = member({ exitDate: utc("2026-03-01") });
+    expect(overlapsEmployment(m, marco.start, marco.endExclusive)).toBe(true);
+  });
+
+  it("admissão no primeiro dia do mês SEGUINTE não conta (fronteira exclusiva)", () => {
+    const m = member({ entryDate: utc("2026-04-01") });
+    expect(overlapsEmployment(m, marco.start, marco.endExclusive)).toBe(false);
+  });
+
+  it("vínculo que cobre o período inteiro (entrou antes, saiu depois) conta", () => {
+    const m = member({ entryDate: utc("2025-06-01"), exitDate: utc("2026-12-31") });
+    expect(overlapsEmployment(m, marco.start, marco.endExclusive)).toBe(true);
+  });
+
+  it("passagem curta inteiramente dentro do período conta", () => {
+    const m = member({ entryDate: utc("2026-03-05"), exitDate: utc("2026-03-15") });
+    expect(overlapsEmployment(m, marco.start, marco.endExclusive)).toBe(true);
   });
 });
