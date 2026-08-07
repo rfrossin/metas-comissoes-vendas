@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prismaTest, resetDatabase, seedTwoTenants, type TwoTenantFixtures } from "../test/fixtures";
-import { assertEditableMembers, assertMemberWithinLedScope, assertVisibleMembers, resolveVisibleMemberFilter } from "./scope.util";
+import {
+  assertEditableMembers,
+  assertMemberWithinLedScope,
+  assertVisibleMembers,
+  resolveAncestorIds,
+  resolveVisibleMemberFilter,
+} from "./scope.util";
 import { ForbiddenError } from "../utils/http-errors";
 
 // Este arquivo cobre o que a Fase 0 do plano de migração exige antes de
@@ -252,6 +258,87 @@ describe("scope.util — resolução de escopo por papel", () => {
     await expect(
       assertMemberWithinLedScope(tenantA.companyId, requester, { id: teamLeader.id, teamId: null }),
     ).resolves.toBeUndefined();
+  });
+
+  // Regra confirmada com o usuário (2026-08-07): TODO Membro fica sob uma
+  // hierarquia. Quem não tem Time é posicionado pelo nó que LIDERA, gerando
+  // um caminho PARCIAL — um Líder de Departamento fica em Canal>Depto (sem
+  // Time), um Gerente de Canal em Canal.
+  it("resolveAncestorIds posiciona o Líder de Time pelo Time que ele lidera (caminho completo)", async () => {
+    const { tenantA } = fixtures;
+    const cargo = await prismaTest.cargo.findFirstOrThrow({ where: { companyId: tenantA.companyId } });
+    const team = await prismaTest.team.findFirstOrThrow({ where: { id: tenantA.teamId } });
+    const department = await prismaTest.department.findFirstOrThrow({ where: { id: team.departmentId } });
+
+    const leader = await prismaTest.member.create({
+      data: {
+        companyId: tenantA.companyId,
+        teamId: null,
+        cargoId: cargo.id,
+        fullName: "Líder do Time",
+        memberType: "GESTOR",
+        status: "ATIVO",
+        nodeResponsibleFor: { create: { companyId: tenantA.companyId, nodeType: "TIME", teamId: team.id } },
+      },
+    });
+
+    const ancestry = await resolveAncestorIds(tenantA.companyId, "MEMBRO", leader.id);
+
+    expect(ancestry.memberId).toBe(leader.id);
+    expect(ancestry.teamId).toBe(team.id);
+    expect(ancestry.departmentId).toBe(department.id);
+    expect(ancestry.channelId).toBe(department.channelId);
+  });
+
+  it("resolveAncestorIds posiciona o Líder de Departamento em Canal>Departamento, sem Time", async () => {
+    const { tenantA } = fixtures;
+    const cargo = await prismaTest.cargo.findFirstOrThrow({ where: { companyId: tenantA.companyId } });
+    const team = await prismaTest.team.findFirstOrThrow({ where: { id: tenantA.teamId } });
+    const department = await prismaTest.department.findFirstOrThrow({ where: { id: team.departmentId } });
+
+    const leader = await prismaTest.member.create({
+      data: {
+        companyId: tenantA.companyId,
+        teamId: null,
+        cargoId: cargo.id,
+        fullName: "Líder do Departamento",
+        memberType: "GESTOR",
+        status: "ATIVO",
+        nodeResponsibleFor: {
+          create: { companyId: tenantA.companyId, nodeType: "DEPARTAMENTO", departmentId: department.id },
+        },
+      },
+    });
+
+    const ancestry = await resolveAncestorIds(tenantA.companyId, "MEMBRO", leader.id);
+
+    // Caminho PARCIAL: chega até o Departamento e para — ele não pertence a
+    // Time nenhum, e inventar um seria errado.
+    expect(ancestry.teamId).toBeNull();
+    expect(ancestry.departmentId).toBe(department.id);
+    expect(ancestry.channelId).toBe(department.channelId);
+  });
+
+  it("resolveAncestorIds não posiciona quem não tem Time nem liderança", async () => {
+    const { tenantA } = fixtures;
+    const cargo = await prismaTest.cargo.findFirstOrThrow({ where: { companyId: tenantA.companyId } });
+
+    const floating = await prismaTest.member.create({
+      data: {
+        companyId: tenantA.companyId,
+        teamId: null,
+        cargoId: cargo.id,
+        fullName: "Sem alocação",
+        memberType: "GESTOR",
+        status: "ATIVO",
+      },
+    });
+
+    const ancestry = await resolveAncestorIds(tenantA.companyId, "MEMBRO", floating.id);
+
+    expect(ancestry.teamId).toBeNull();
+    expect(ancestry.departmentId).toBeNull();
+    expect(ancestry.channelId).toBeNull();
   });
 
   it("Gestor não alcança um Membro sem Time e sem liderança nenhuma", async () => {

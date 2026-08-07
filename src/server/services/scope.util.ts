@@ -39,8 +39,47 @@ export async function resolveAncestorIds(
   if (currentType === "MEMBRO" && currentId) {
     result.memberId = currentId;
     const member = await prisma.member.findFirst({ where: { id: currentId, companyId }, select: { teamId: true } });
-    currentId = member?.teamId ?? null;
-    currentType = "TIME";
+
+    if (member?.teamId) {
+      currentId = member.teamId;
+      currentType = "TIME";
+    } else {
+      // Membro sem Time é, quase sempre, um Líder: ele não PERTENCE a um
+      // nó, ele LIDERA um. Sua posição na árvore é o nó liderado mais
+      // profundo — Líder de Time fica em Canal>Depto>Time, Líder de
+      // Departamento em Canal>Depto, Gerente de Canal em Canal.
+      //
+      // Sem isto o Líder ficava sem ancestralidade nenhuma (hierarquia "—"
+      // na tela, nenhum Canal/Depto/Time preenchido), que é o que impedia
+      // a gestão dele fazer sentido: quem tem atribuição no Departamento
+      // não o alcançava, e ele não aparecia sob hierarquia alguma.
+      //
+      // Prioridade TIME > DEPARTAMENTO > CANAL: se lidera mais de um nó,
+      // vale o mais específico — é o que melhor descreve onde ele atua.
+      const led = await prisma.nodeResponsible.findMany({
+        where: { companyId, memberId: currentId, NOT: { nodeType: "EMPRESA" } },
+        select: { nodeType: true, channelId: true, departmentId: true, teamId: true },
+      });
+
+      const byTeam = led.find((n) => n.nodeType === "TIME" && n.teamId);
+      const byDepartment = led.find((n) => n.nodeType === "DEPARTAMENTO" && n.departmentId);
+      const byChannel = led.find((n) => n.nodeType === "CANAL" && n.channelId);
+
+      if (byTeam) {
+        currentId = byTeam.teamId;
+        currentType = "TIME";
+      } else if (byDepartment) {
+        currentId = byDepartment.departmentId;
+        currentType = "DEPARTAMENTO";
+      } else if (byChannel) {
+        currentId = byChannel.channelId;
+        currentType = "CANAL";
+      } else {
+        // Nem Time nem liderança: não há como posicioná-lo na árvore.
+        currentId = null;
+        currentType = "TIME";
+      }
+    }
   }
 
   if (currentType === "TIME" && currentId) {

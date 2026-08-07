@@ -116,6 +116,41 @@ export function useEntityOptions(companyId: string) {
       ),
     );
 
+    // Caminho PARCIAL do líder (Membro sem Time): ele não pertence a um nó,
+    // lidera um — Líder de Time aparece em Canal>Departamento>Time, de
+    // Departamento em Canal>Departamento, de Canal só no Canal. Mesmo
+    // critério de resolveAncestorIds no backend. Os nomes saem da árvore já
+    // carregada acima.
+    const teamPathById = new Map<string, string[]>();
+    const departmentPathById = new Map<string, string[]>();
+    const channelPathById = new Map<string, string[]>();
+    for (const c of tree?.channels ?? []) {
+      channelPathById.set(c.id, [`Canal: ${c.name}`]);
+      for (const d of c.departments) {
+        departmentPathById.set(d.id, [`Canal: ${c.name}`, `Departamento: ${d.name}`]);
+        for (const t of d.teams) {
+          teamPathById.set(t.id, [`Canal: ${c.name}`, `Departamento: ${d.name}`, `Time: ${t.name}`]);
+        }
+      }
+    }
+
+    function leadershipParts(refs: NodeResponsibleRef[]): string[] {
+      const teamRef = refs.find((r) => r.nodeType === "TIME" && r.teamId);
+      if (teamRef?.teamId && teamPathById.has(teamRef.teamId)) return teamPathById.get(teamRef.teamId)!;
+
+      const departmentRef = refs.find((r) => r.nodeType === "DEPARTAMENTO" && r.departmentId);
+      if (departmentRef?.departmentId && departmentPathById.has(departmentRef.departmentId)) {
+        return departmentPathById.get(departmentRef.departmentId)!;
+      }
+
+      const channelRef = refs.find((r) => r.nodeType === "CANAL" && r.channelId);
+      if (channelRef?.channelId && channelPathById.has(channelRef.channelId)) return channelPathById.get(channelRef.channelId)!;
+
+      if (refs.some((r) => r.nodeType === "EMPRESA")) return ["Empresa"];
+
+      return [];
+    }
+
     const membro: EntityOption[] = (members ?? []).map((m) => {
       const parts: string[] = [];
       if (m.team) {
@@ -123,7 +158,8 @@ export function useEntityOptions(companyId: string) {
         parts.push(`Departamento: ${m.team.department.name}`);
         parts.push(`Time: ${m.team.name}`);
       } else {
-        parts.push("Time Gestão");
+        const led = leadershipParts(m.nodeResponsibleFor);
+        parts.push(...(led.length > 0 ? led : ["Time Gestão"]));
       }
       parts.push(`Cargo: ${m.cargo?.name ?? "—"}`);
 

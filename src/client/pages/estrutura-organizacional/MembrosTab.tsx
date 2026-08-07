@@ -12,8 +12,8 @@ interface NodeResponsibleForEntry {
   departmentId: string | null;
   teamId: string | null;
   channel: { name: string } | null;
-  department: { name: string } | null;
-  team: { name: string } | null;
+  department: { name: string; channel: { name: string } } | null;
+  team: { name: string; department: { name: string; channel: { name: string } } } | null;
 }
 
 interface ManagedMember {
@@ -41,9 +41,32 @@ function extractErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+// Todo Membro fica sob uma hierarquia, mesmo sem Time. Quem tem Time usa o
+// caminho completo (Canal / Depto / Time); quem não tem é posicionado pelo
+// nó que LIDERA, gerando um caminho PARCIAL — um Líder de Departamento fica
+// em "Canal / Depto", um Gerente de Canal em "Canal". Espelha
+// resolveAncestorIds no backend; sem isso o líder aparecia como "—", fora de
+// qualquer hierarquia.
 function hierarchyPath(member: ManagedMember): string {
-  if (!member.team) return "—";
-  return `${member.team.department.channel.name} / ${member.team.department.name} / ${member.team.name}`;
+  if (member.team) {
+    return `${member.team.department.channel.name} / ${member.team.department.name} / ${member.team.name}`;
+  }
+
+  // Nó liderado mais específico primeiro (Time > Depto > Canal): é o que
+  // melhor descreve onde a pessoa atua.
+  const led = member.nodeResponsibleFor;
+  const team = led.find((entry) => entry.nodeType === "TIME" && entry.team)?.team;
+  if (team) return `${team.department.channel.name} / ${team.department.name} / ${team.name}`;
+
+  const department = led.find((entry) => entry.nodeType === "DEPARTAMENTO" && entry.department)?.department;
+  if (department) return `${department.channel.name} / ${department.name}`;
+
+  const channel = led.find((entry) => entry.nodeType === "CANAL" && entry.channel)?.channel;
+  if (channel) return channel.name;
+
+  if (led.some((entry) => entry.nodeType === "EMPRESA")) return "Empresa";
+
+  return "—";
 }
 
 function leadershipNames(member: ManagedMember): string | null {

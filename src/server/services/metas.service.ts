@@ -1412,8 +1412,10 @@ export { resolveAncestorIds };
 // resolvidas (não sobe a árvore de novo — reaproveita o que resolveAncestorIds
 // já gravou na Linha): do nível imediatamente acima da entidade até o Canal,
 // nomes separados por ">" (ex: "Hospitalar>Atacado" para uma Linha de Time).
-// null para Canal/Empresa (nada acima a mostrar). Membro sem Time (Time
-// Gestão) aparece como "Time Gestão" no lugar do nome do Time.
+// null para Canal/Empresa (nada acima a mostrar). Membro sem Time é
+// posicionado pelo nó que lidera (ver resolveAncestorIds), gerando um
+// caminho PARCIAL — só cai em "Time Gestão" quem não tem Time nem
+// liderança nenhuma.
 export async function buildHierarchyPath(
   companyId: string,
   entityType: OrgScopeType,
@@ -1421,8 +1423,18 @@ export async function buildHierarchyPath(
 ): Promise<string | null> {
   const parts: string[] = [];
 
+  // Membro sem Time não é "sem hierarquia": se ele lidera um nó,
+  // resolveAncestorIds já preencheu a ancestralidade a partir do nó
+  // liderado (caminho parcial — um Líder de Departamento tem
+  // Canal>Departamento, sem Time). Só rotulamos "Time Gestão" quando não
+  // há nível nenhum preenchido, ou seja, quando de fato não há como
+  // posicionar o Membro na árvore.
   if (entityType === "MEMBRO") {
-    parts.push(ancestry.teamId ? await resolveEntityName(companyId, "TIME", ancestry.teamId) : "Time Gestão");
+    if (ancestry.teamId) {
+      parts.push(await resolveEntityName(companyId, "TIME", ancestry.teamId));
+    } else if (!ancestry.departmentId && !ancestry.channelId) {
+      parts.push("Time Gestão");
+    }
   }
   if ((entityType === "MEMBRO" || entityType === "TIME") && ancestry.departmentId) {
     parts.push(await resolveEntityName(companyId, "DEPARTAMENTO", ancestry.departmentId));

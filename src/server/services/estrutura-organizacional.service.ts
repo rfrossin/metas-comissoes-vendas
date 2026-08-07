@@ -110,8 +110,13 @@ export async function listMembersForManagement(companyId: string, requestingUser
           departmentId: true,
           teamId: true,
           channel: { select: { name: true } },
-          department: { select: { name: true } },
-          team: { select: { name: true } },
+          // Ancestrais do nó liderado: um Membro sem Time é posicionado na
+          // árvore pelo nó que ele LIDERA (caminho parcial — Líder de
+          // Departamento fica em Canal>Departamento). Sem os nomes dos
+          // ancestrais a tela não tem como montar esse caminho e mostrava
+          // só "—".
+          department: { select: { name: true, channel: { select: { name: true } } } },
+          team: { select: { name: true, department: { select: { name: true, channel: { select: { name: true } } } } } },
         },
       },
     },

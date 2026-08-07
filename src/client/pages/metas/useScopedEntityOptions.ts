@@ -85,6 +85,39 @@ export function useScopedEntityOptions(companyId: string, mode: ScopedOptionsMod
       parentId: t.departmentId,
     }));
 
+    // Índices por id para posicionar o Membro sem Time pelo nó que ele
+    // LIDERA — os nós já vêm carregados acima, então não custa consulta
+    // nenhuma.
+    const teamById = new Map((data?.teams ?? []).map((t) => [t.id, t]));
+    const departmentById = new Map((data?.departments ?? []).map((d) => [d.id, d]));
+    const channelById = new Map((data?.channels ?? []).map((c) => [c.id, c]));
+
+    // Caminho PARCIAL do líder: ele não pertence a um nó, lidera um. Líder
+    // de Time aparece com Canal>Departamento>Time; de Departamento, com
+    // Canal>Departamento; de Canal, só com o Canal. Sem isto todos caíam em
+    // "Sem Time", fora de qualquer hierarquia.
+    function leadershipParts(refs: NodeResponsibleRef[]): string[] {
+      const teamRef = refs.find((r) => r.nodeType === "TIME" && r.teamId);
+      const team = teamRef?.teamId ? teamById.get(teamRef.teamId) : undefined;
+      if (team) {
+        return [`Canal: ${team.department.channel.name}`, `Departamento: ${team.department.name}`, `Time: ${team.name}`];
+      }
+
+      const departmentRef = refs.find((r) => r.nodeType === "DEPARTAMENTO" && r.departmentId);
+      const department = departmentRef?.departmentId ? departmentById.get(departmentRef.departmentId) : undefined;
+      if (department) {
+        return [`Canal: ${department.channel.name}`, `Departamento: ${department.name}`];
+      }
+
+      const channelRef = refs.find((r) => r.nodeType === "CANAL" && r.channelId);
+      const channel = channelRef?.channelId ? channelById.get(channelRef.channelId) : undefined;
+      if (channel) return [`Canal: ${channel.name}`];
+
+      if (refs.some((r) => r.nodeType === "EMPRESA")) return ["Empresa"];
+
+      return [];
+    }
+
     const membro: EntityOption[] = (data?.members ?? []).map((m) => {
       const parts: string[] = [];
       if (m.team) {
@@ -92,7 +125,10 @@ export function useScopedEntityOptions(companyId: string, mode: ScopedOptionsMod
         parts.push(`Departamento: ${m.team.department.name}`);
         parts.push(`Time: ${m.team.name}`);
       } else {
-        parts.push("Sem Time");
+        const led = leadershipParts(m.nodeResponsibleFor);
+        // "Sem Time" só para quem não tem Time NEM lidera nada — aí de fato
+        // não há hierarquia a mostrar.
+        parts.push(...(led.length > 0 ? led : ["Sem Time"]));
       }
       parts.push(`Cargo: ${m.cargo?.name ?? "—"}`);
 
