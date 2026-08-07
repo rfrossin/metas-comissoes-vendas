@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { Prisma } from "@prisma/client";
 import {
+  monthBucketOfWindow,
+  monthOverlapsEmployment,
   overlapsEmployment,
   resolveMonthlyFixedSalary,
   resolveMonthlyManualAdjustment,
@@ -150,6 +152,32 @@ describe("resolveMonthlyManualAdjustment — Valor Adicional do Fechamento", () 
     expect(resolveMonthlyManualAdjustment("member-2", "2026-06", context).toString()).toBe("0");
   });
 
+  it("cenário da Ana: Fixo NÃO é somado em meses anteriores à data de entrada", () => {
+    // Entrada em JAN/2025 — Recebíveis não pode mostrar Fixo em 2024.
+    const ana = member({ entryDate: utc("2025-01-01") });
+
+    expect(monthOverlapsEmployment(ana, "2024-11")).toBe(false);
+    expect(monthOverlapsEmployment(ana, "2024-12")).toBe(false);
+    expect(monthOverlapsEmployment(ana, "2025-01")).toBe(true);
+    expect(monthOverlapsEmployment(ana, "2025-02")).toBe(true);
+  });
+
+  it("Fixo não é somado em meses posteriores à saída", () => {
+    const m = member({ entryDate: utc("2025-01-01"), exitDate: utc("2025-06-30") });
+
+    expect(monthOverlapsEmployment(m, "2025-06")).toBe(true);
+    expect(monthOverlapsEmployment(m, "2025-07")).toBe(false);
+  });
+
+  it("mês da própria admissão conta, mesmo com entrada no fim do mês", () => {
+    const m = member({ entryDate: utc("2025-01-31") });
+    expect(monthOverlapsEmployment(m, "2025-01")).toBe(true);
+  });
+
+  it("Membro sem datas de vínculo conta em qualquer mês", () => {
+    expect(monthOverlapsEmployment(member(), "2020-01")).toBe(true);
+  });
+
   it("cenário do usuário: Fechamento de Junho (Fixo 2.000 + Adicional) vence o Cargo atual de 3.000", () => {
     const m = member({ cargo: { id: "cargo-1", name: "Vendedor", defaultFixedSalary: new Prisma.Decimal(3000) } });
     const context = closedMonth(m.id, "2026-06", 2000, 100);
@@ -213,5 +241,24 @@ describe("overlapsEmployment — vínculo empregatício delimita Recebíveis/Fec
   it("passagem curta inteiramente dentro do período conta", () => {
     const m = member({ entryDate: utc("2026-03-05"), exitDate: utc("2026-03-15") });
     expect(overlapsEmployment(m, marco.start, marco.endExclusive)).toBe(true);
+  });
+});
+
+// Existindo Fechamento para o mês, ele sobrepõe o cálculo daquele período.
+// A trava usa o mês em que a janela TERMINA para decidir a qual Fechamento
+// ela pertence — é o mesmo critério de agrupamento do Fechamento.
+describe("monthBucketOfWindow — a qual mês (e portanto a qual Fechamento) a janela pertence", () => {
+  it("janela mensal pertence ao próprio mês", () => {
+    expect(monthBucketOfWindow(utc("2025-02-01")).toISOString().slice(0, 7)).toBe("2025-01");
+  });
+
+  it("janela trimestral pertence ao mês em que TERMINA", () => {
+    // Jan→Mar: pertence a Março, não a Janeiro.
+    expect(monthBucketOfWindow(utc("2025-04-01")).toISOString().slice(0, 7)).toBe("2025-03");
+  });
+
+  it("janela semanal que atravessa a virada do mês pertence ao mês do último dia", () => {
+    // 29/01 a 04/02 (fim exclusivo 05/02) — último dia é 04/02, então Fev.
+    expect(monthBucketOfWindow(utc("2025-02-05")).toISOString().slice(0, 7)).toBe("2025-02");
   });
 });

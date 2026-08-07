@@ -54,6 +54,28 @@ export function overlapsEmployment(member: MemberEmploymentWindow, periodStart: 
   return true;
 }
 
+// Mesma regra, para um mês civil identificado por "AAAA-MM" — o Fixo é
+// apurado por mês, não por janela de Campanha. Sem isto o Fixo era somado
+// para TODO mês do intervalo consultado, inclusive meses anteriores à
+// admissão (o Membro passava no filtro por ter vínculo em ALGUM mês do
+// range, e depois recebia Fixo em todos eles).
+// Mês a que uma janela pertence: o mês em que ela TERMINA (mesmo critério
+// de monthBucketOf em fechamento.service.ts — uma Base Trimestral encerrada
+// em Março pertence a Março). Duplicado aqui para não criar ciclo de import
+// (fechamento.service.ts já importa deste arquivo).
+export function monthBucketOfWindow(periodEndExclusive: Date): Date {
+  const lastDay = new Date(periodEndExclusive);
+  lastDay.setUTCDate(lastDay.getUTCDate() - 1);
+  return firstDayOfMonthUtc(lastDay);
+}
+
+export function monthOverlapsEmployment(member: MemberEmploymentWindow, monthKey: string): boolean {
+  const [year, month] = monthKey.split("-").map(Number);
+  const monthStart = new Date(Date.UTC(year, month - 1, 1));
+  const monthEndExclusive = new Date(Date.UTC(year, month, 1));
+  return overlapsEmployment(member, monthStart, monthEndExclusive);
+}
+
 // Filtro Prisma equivalente a overlapsEmployment — para não trazer do banco
 // Membros que já sabemos estar fora da janela.
 export function employmentOverlapFilter(periodStart: Date, periodEndExclusive: Date): Prisma.MemberWhereInput {
@@ -317,6 +339,16 @@ export async function computeMemberReceivablesRows(
     select: { entryDate: true, exitDate: true },
   });
 
+  // Meses deste Membro que já têm Fechamento salvo. Dentro deles vale só o
+  // que foi congelado (ver a trava dentro do laço de janelas abaixo).
+  const closedMonthKeys = snapshotContext
+    ? new Set(
+        [...snapshotContext.closingByMemberMonth.keys()]
+          .filter((key) => key.startsWith(`${memberId}|`))
+          .map((key) => key.slice(memberId.length + 1)),
+      )
+    : undefined;
+
   for (const beneficiary of beneficiaries) {
     let base = baseCache.get(beneficiary.receivablesBaseId);
     if (!base) {
@@ -335,6 +367,20 @@ export async function computeMemberReceivablesRows(
 
     for (const window of windows) {
       const frozen = snapshotContext?.snapshotByWindowKey.get(windowSnapshotKey(memberId, base.id, window.start));
+
+      // Regra confirmada com o usuário (2026-08-07): existindo Fechamento
+      // para o mês, ele SOBREPÕE o cálculo daquele período — vale só o que
+      // foi congelado na folha.
+      //
+      // Não basta usar o snapshot quando ele existe: o Fechamento congela
+      // apenas as janelas que existiam no momento em que foi salvo. Uma
+      // Base criada (ou reeditada, o que desloca o início da janela) DEPOIS
+      // do fechamento cai dentro do mês fechado sem snapshot nenhum e, sem
+      // esta trava, voltava a ser calculada ao vivo — somando valor a uma
+      // folha que já estava fechada.
+      if (!frozen && closedMonthKeys?.has(monthKeyOf(monthBucketOfWindow(window.endExclusive)))) {
+        continue;
+      }
 
       // Janela inteiramente fora do vínculo não gera linha. Um Fechamento
       // já salvo (frozen) sobrevive mesmo assim: é histórico consumado, e
@@ -534,6 +580,13 @@ export async function getReceivablesOverview(
   for (const { member } of memberRows) {
     if (!member.cargo) continue;
     for (const monthKey of monthKeys) {
+      // Mês fora do vínculo não gera Fixo: o Membro só tem Recebíveis
+      // (Fixo E Benefícios) entre a entrada e a saída. Um mês já FECHADO
+      // continua contando mesmo assim — o valor vem do Fechamento, que é
+      // histórico consumado e não se recalcula.
+      const isClosed = snapshotContext.closingByMemberMonth.has(`${member.id}|${monthKey}`);
+      if (!isClosed && !monthOverlapsEmployment(member, monthKey)) continue;
+
       const monthlySalary = resolveMonthlyFixedSalary(member, monthKey, snapshotContext);
       fixoTotal = fixoTotal.plus(monthlySalary);
       fixoPorMes.set(monthKey, (fixoPorMes.get(monthKey) ?? new Prisma.Decimal(0)).plus(monthlySalary));
