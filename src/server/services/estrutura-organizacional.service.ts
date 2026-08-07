@@ -3,6 +3,7 @@ import type { MemberStatus, MemberType, OrgNodeType } from "@prisma/client";
 import { ConflictError, ForbiddenError, NotFoundError } from "../utils/http-errors";
 import {
   assertAdmin,
+  assertMemberWithinLedScope,
   assertNodeWithinLedScope,
   resolveEditableNodeIds,
   resolveEditableMemberFilter,
@@ -573,7 +574,11 @@ export async function updateMember(companyId: string, requestingUser: Requesting
   if (requestingUser.role === "LIDERANCA_NO" && member.id === requesterMemberId) {
     throw new ForbiddenError("Você não pode editar o seu próprio cadastro de Membro.");
   }
-  await assertNodeWithinLedScope(companyId, requestingUser, "TIME", member.teamId);
+  // Considera tanto o Time do Membro quanto as hierarquias que ele lidera —
+  // um Gestor normalmente não tem Time, e a checagem só por teamId o
+  // tornava ineditável para o Gestor do nó acima (ver
+  // assertMemberWithinLedScope).
+  await assertMemberWithinLedScope(companyId, requestingUser, member);
   await assertCargoBelongsToCompany(companyId, data.cargoId);
 
   const leaderships = data.memberType === "GESTOR" ? data.leaderships : [];

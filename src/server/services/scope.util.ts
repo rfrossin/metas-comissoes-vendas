@@ -591,6 +591,62 @@ export async function assertNodeWithinLedScope(
   await assertNodeAllowed(companyId, assignments, nodeType, nodeId, errorMessage);
 }
 
+// Trava de escrita sobre um MEMBRO da Estrutura Organizacional.
+//
+// Um Membro pode estar na árvore de duas formas, e as duas contam:
+//   1. estruturalmente, pelo Time a que pertence (Canal > Dep > Time);
+//   2. pela LIDERANÇA que exerce — o líder de um Time está em Canal > Dep >
+//      Time; o de um Departamento, em Canal > Departamento.
+//
+// Só a forma (1) era considerada, e um Gestor típico não tem Time (lidera
+// o nó, não pertence a ele): member.teamId vinha null, isNodeAllowed
+// devolvia false direto no `!nodeId` e ninguém além do Admin conseguia
+// editá-lo — nem o Gestor do Departamento logo acima. Regra confirmada com
+// o usuário (2026-08-07): quem tem atribuição num Departamento alcança os
+// líderes dos Times dentro dele e o líder do próprio Departamento.
+//
+// Basta UM dos caminhos cair dentro do escopo. Membro sem Time e sem
+// liderança nenhuma continua sendo exclusividade do Admin — não há nó pelo
+// qual ancorá-lo.
+export async function assertMemberWithinLedScope(
+  companyId: string,
+  requestingUser: RequestingUser,
+  member: { id: string; teamId: string | null },
+  errorMessage = "Você só pode alterar dados dentro da hierarquia que você lidera.",
+): Promise<void> {
+  if (requestingUser.role === "ADMINISTRADOR") return;
+  if (requestingUser.role !== "LIDERANCA_NO") {
+    throw new ForbiddenError(errorMessage);
+  }
+
+  const requesterMemberId = await resolveRequesterMemberId(companyId, requestingUser);
+  if (!requesterMemberId) throw new ForbiddenError(errorMessage);
+
+  const assignments = await resolveUserAssignments(companyId, requestingUser.id);
+  if (assignments.some((a) => a.scopeType === "EMPRESA")) return;
+
+  // Caminho estrutural (Membro operacional, com Time).
+  if (member.teamId && (await isNodeAllowed(companyId, assignments, "TIME", member.teamId))) return;
+
+  // Caminho da liderança (Gestor, normalmente sem Time): cada nó liderado
+  // é testado como se fosse a posição dele na árvore.
+  const ledNodes = await prisma.nodeResponsible.findMany({
+    where: { companyId, memberId: member.id },
+    select: { nodeType: true, channelId: true, departmentId: true, teamId: true },
+  });
+
+  for (const node of ledNodes) {
+    // Liderança de EMPRESA não é alcançável por atribuição de hierarquia
+    // (só um Admin, ou uma atribuição EMPRESA, já tratada acima).
+    if (node.nodeType === "EMPRESA") continue;
+
+    const nodeId = node.nodeType === "CANAL" ? node.channelId : node.nodeType === "DEPARTAMENTO" ? node.departmentId : node.teamId;
+    if (nodeId && (await isNodeAllowed(companyId, assignments, node.nodeType, nodeId))) return;
+  }
+
+  throw new ForbiddenError(errorMessage);
+}
+
 // Mesma trava de nó, mas também deixa passar um OPERACIONAL cuja
 // atribuição EDITAR cobre o nó — usada só onde a spec dá poder de escrita
 // explícito ao Usuário: criação/edição de Linha de Meta (GoalLine).

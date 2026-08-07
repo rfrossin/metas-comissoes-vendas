@@ -290,6 +290,16 @@ export async function computeMemberReceivablesRows(
   const beneficiaries = await loadRelevantBeneficiaries(companyId, [memberId], periodStart, periodEndExclusive);
   const rows: MemberReceivableRow[] = [];
 
+  // Vínculo do Membro: nenhuma janela fora de [entrada, saída] gera
+  // Recebível. Filtrar só o Membro no início do período (como faz
+  // resolveSelectedMembers) não basta — quem foi admitido no meio do
+  // intervalo consultado passa no filtro e ainda assim não pode receber
+  // pelas janelas anteriores à admissão.
+  const employment = await prisma.member.findFirst({
+    where: { id: memberId, companyId },
+    select: { entryDate: true, exitDate: true },
+  });
+
   for (const beneficiary of beneficiaries) {
     let base = baseCache.get(beneficiary.receivablesBaseId);
     if (!base) {
@@ -308,6 +318,15 @@ export async function computeMemberReceivablesRows(
 
     for (const window of windows) {
       const frozen = snapshotContext?.snapshotByWindowKey.get(windowSnapshotKey(memberId, base.id, window.start));
+
+      // Janela inteiramente fora do vínculo não gera linha. Um Fechamento
+      // já salvo (frozen) sobrevive mesmo assim: é histórico consumado, e
+      // escondê-lo faria sumir dinheiro real já apurado — mesmo critério
+      // usado em listClosings.
+      if (!frozen && employment && !overlapsEmployment(employment, window.start, window.endExclusive)) {
+        continue;
+      }
+
       const status = resolveWindowStatus(window, referenceDate, !!frozen);
       const indicatorLabel = base.indicatorType === "META" ? (base.primaryGoal?.name ?? "—") : (base.resultType?.name ?? "—");
 

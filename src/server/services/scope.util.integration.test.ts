@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prismaTest, resetDatabase, seedTwoTenants, type TwoTenantFixtures } from "../test/fixtures";
-import { assertEditableMembers, assertVisibleMembers, resolveVisibleMemberFilter } from "./scope.util";
+import { assertEditableMembers, assertMemberWithinLedScope, assertVisibleMembers, resolveVisibleMemberFilter } from "./scope.util";
 import { ForbiddenError } from "../utils/http-errors";
 
 // Este arquivo cobre o que a Fase 0 do plano de migração exige antes de
@@ -130,7 +130,13 @@ describe("scope.util — resolução de escopo por papel", () => {
     expect(count).toBe(1);
   });
 
-  it("regra de exclusão de líder: atribuição de hierarquia dá acesso ao Time mas exclui o próprio Membro-líder do nó atribuído", async () => {
+  // Regra confirmada com o usuário (2026-08-06): uma atribuição de
+  // hierarquia alcança TODOS os Membros abaixo dela, LÍDERES INCLUSIVE.
+  // Este teste afirmava o contrário (a antiga "exclusão de líder", que
+  // removia do escopo o Responsável do nó atribuído) — era justamente o
+  // que deixava a tela de Membros vazia e escondia os líderes dos Times em
+  // Fechamento/Recebíveis para quem tinha atribuição de Departamento.
+  it("atribuição de hierarquia dá acesso a todo o Time, incluindo o Membro-líder do nó atribuído", async () => {
     const { tenantA } = fixtures;
 
     // Um segundo Membro no mesmo Time, que será o "liderado" visível via
@@ -190,6 +196,107 @@ describe("scope.util — resolução de escopo por papel", () => {
     const ids = visibleIds.map((m) => m.id);
 
     expect(ids).toContain(ledMember.id);
-    expect(ids).not.toContain(tenantA.memberId);
+    // O líder do Time entra no escopo junto com o resto do Time.
+    expect(ids).toContain(tenantA.memberId);
+  });
+
+  // Regressão do caso reportado em 2026-08-07: um Gestor de Departamento
+  // não conseguia editar o Gestor de um Time abaixo dele. O líder de um
+  // Time normalmente NÃO pertence a Time nenhum (teamId null) — ele lidera
+  // o nó, não é membro dele —, e a checagem de escrita só olhava
+  // member.teamId, caindo em "sem nó" e negando para todo mundo menos o
+  // Admin.
+  it("Gestor de Departamento pode editar o Gestor de um Time abaixo dele (líder sem Time próprio)", async () => {
+    const { tenantA } = fixtures;
+    const cargo = await prismaTest.cargo.findFirstOrThrow({ where: { companyId: tenantA.companyId } });
+
+    // Gestor do Time: sem teamId, existindo na árvore só pela liderança.
+    const teamLeader = await prismaTest.member.create({
+      data: {
+        companyId: tenantA.companyId,
+        teamId: null,
+        cargoId: cargo.id,
+        fullName: "Gestor do Time",
+        memberType: "GESTOR",
+        status: "ATIVO",
+        nodeResponsibleFor: {
+          create: { companyId: tenantA.companyId, nodeType: "TIME", teamId: tenantA.teamId },
+        },
+      },
+    });
+
+    // Usuário Gestor com atribuição no DEPARTAMENTO que contém aquele Time.
+    const team = await prismaTest.team.findFirstOrThrow({ where: { id: tenantA.teamId } });
+    const gestorDepto = await prismaTest.user.create({
+      data: {
+        companyId: tenantA.companyId,
+        email: "gestor-depto@teste.local",
+        passwordHash: "x",
+        role: "LIDERANCA_NO",
+        memberId: tenantA.memberId,
+      },
+    });
+    await prismaTest.userScopeAssignment.create({
+      data: {
+        companyId: tenantA.companyId,
+        userId: gestorDepto.id,
+        scopeType: "DEPARTAMENTO",
+        scopeId: team.departmentId,
+        accessLevel: "EDITAR",
+      },
+    });
+
+    const requester = { id: gestorDepto.id, companyId: tenantA.companyId, role: "LIDERANCA_NO" };
+
+    // Não lança: o líder do Time é alcançável pela atribuição de Departamento.
+    await expect(
+      assertMemberWithinLedScope(tenantA.companyId, requester, { id: teamLeader.id, teamId: null }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("Gestor não alcança um Membro sem Time e sem liderança nenhuma", async () => {
+    const { tenantA } = fixtures;
+    const cargo = await prismaTest.cargo.findFirstOrThrow({ where: { companyId: tenantA.companyId } });
+    const team = await prismaTest.team.findFirstOrThrow({ where: { id: tenantA.teamId } });
+
+    // Diretoria sem alocação: não tem Time nem lidera nada — não há nó pelo
+    // qual um Gestor de Departamento possa alcançá-lo.
+    const floating = await prismaTest.member.create({
+      data: {
+        companyId: tenantA.companyId,
+        teamId: null,
+        cargoId: cargo.id,
+        fullName: "Diretor sem alocação",
+        memberType: "GESTOR",
+        status: "ATIVO",
+      },
+    });
+
+    const gestorDepto = await prismaTest.user.create({
+      data: {
+        companyId: tenantA.companyId,
+        email: "gestor-depto-2@teste.local",
+        passwordHash: "x",
+        role: "LIDERANCA_NO",
+        memberId: tenantA.memberId,
+      },
+    });
+    await prismaTest.userScopeAssignment.create({
+      data: {
+        companyId: tenantA.companyId,
+        userId: gestorDepto.id,
+        scopeType: "DEPARTAMENTO",
+        scopeId: team.departmentId,
+        accessLevel: "EDITAR",
+      },
+    });
+
+    await expect(
+      assertMemberWithinLedScope(
+        tenantA.companyId,
+        { id: gestorDepto.id, companyId: tenantA.companyId, role: "LIDERANCA_NO" },
+        { id: floating.id, teamId: null },
+      ),
+    ).rejects.toThrow();
   });
 });
