@@ -550,13 +550,29 @@ export async function updateUserRole(
   // só a semântica delas muda (virar Gestor força EDITAR na próxima vez que
   // as atribuições forem salvas; virar Usuário deixa os níveis como estão,
   // livres para editar depois).
-  return writeWithTenant((tx) =>
+  const updated = await writeWithTenant((tx) =>
     tx.user.update({
       where: { id: targetUserId },
       data: { role: newRole },
-      select: { id: true, email: true, role: true },
+      select: { id: true, email: true, role: true, authUserId: true, companyId: true },
     }),
   );
+
+  // Espelha o novo papel no app_metadata da identidade. O token da aplicação
+  // já lê o papel do banco (ver signAppToken), então isto não é o que faz a
+  // permissão valer — mas manter os dois lados coerentes evita que a lista
+  // de empresas do login/seletor mostre o papel antigo, e protege qualquer
+  // leitor futuro do metadata. Falha aqui não desfaz a troca de papel, que é
+  // a fonte de verdade: no pior caso o metadata fica velho e inofensivo.
+  if (updated.authUserId) {
+    await addMembershipToIdentity(updated.authUserId, {
+      userId: updated.id,
+      companyId: updated.companyId,
+      role: updated.role,
+    }).catch(() => undefined);
+  }
+
+  return { id: updated.id, email: updated.email, role: updated.role };
 }
 
 // Admin altera o e-mail de login de QUALQUER outro usuário da empresa —

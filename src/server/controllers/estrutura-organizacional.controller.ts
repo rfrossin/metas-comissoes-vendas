@@ -38,6 +38,16 @@ const leadershipTargetSchema = z.discriminatedUnion("nodeType", [
   z.object({ nodeType: z.literal("TIME"), teamId: z.string().min(1) }),
 ]);
 
+// Datas de vínculo (entrada/saída na empresa): delimitam de quando até
+// quando o Membro tem Recebíveis e Fechamentos. Formato YYYY-MM-DD, ambas
+// opcionais — sem entrada vale desde sempre, sem saída o vínculo segue
+// aberto.
+const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data deve estar no formato AAAA-MM-DD");
+const employmentDatesSchema = {
+  entryDate: isoDateSchema.nullable().optional().default(null),
+  exitDate: isoDateSchema.nullable().optional().default(null),
+};
+
 const memberCreateSchema = z.object({
   fullName: z.string().min(1),
   cargoId: z.string().min(1),
@@ -45,6 +55,7 @@ const memberCreateSchema = z.object({
   memberType: memberTypeSchema,
   customFixedSalary: z.number().nonnegative().nullable().optional().default(null),
   leaderships: z.array(leadershipTargetSchema).optional().default([]),
+  ...employmentDatesSchema,
 });
 
 // teamId propositalmente ausente aqui — imutável após a criação (Regra de
@@ -56,6 +67,7 @@ const memberUpdateSchema = z.object({
   customFixedSalary: z.number().nonnegative().nullable().optional().default(null),
   status: z.enum(["ATIVO", "INATIVO"]),
   leaderships: z.array(leadershipTargetSchema).optional().default([]),
+  ...employmentDatesSchema,
 });
 
 function respondToError(error: unknown, res: Response) {

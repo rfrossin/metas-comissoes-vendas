@@ -43,12 +43,26 @@ async function filterActiveMemberships(authUserId: string, memberships: Membersh
   return memberships.filter((m) => activeCompanyIds.has(m.companyId));
 }
 
-function signAppToken(membership: Membership): string {
-  return jwt.sign(
-    { userId: membership.userId, companyId: membership.companyId, role: membership.role },
-    env.jwtSecret,
-    { expiresIn: "8h" },
-  );
+// O papel do token vem SEMPRE do banco (User.role), nunca do
+// app_metadata da identidade.
+//
+// Motivo: o app_metadata guarda a membership como ela estava quando foi
+// gravada (aceite de convite, aprovação de acesso, criação da empresa) e
+// NÃO é reescrito quando um Admin troca o papel de alguém em
+// updateUserRole — aquilo altera só a tabela users. Assinar o token com
+// membership.role fazia um usuário promovido a Administrador continuar
+// navegando como OPERACIONAL/LIDERANCA_NO até o metadata ser reescrito por
+// algum outro fluxo, e — pior — o objeto `user` devolvido no login já vinha
+// do banco (papel certo), então a tela liberava seções que o backend depois
+// negava, porque só o token decide a autorização.
+//
+// O app_metadata continua sendo a fonte de QUAIS empresas a identidade
+// alcança (ver filterActiveMemberships); só o PAPEL dentro de cada uma
+// passa a ser lido do banco, que é quem o Admin de fato edita.
+function signAppToken(membership: Membership, role: string): string {
+  return jwt.sign({ userId: membership.userId, companyId: membership.companyId, role }, env.jwtSecret, {
+    expiresIn: "8h",
+  });
 }
 
 export type LoginResult =
@@ -113,6 +127,14 @@ export async function login({ email, password }: LoginInput): Promise<LoginResul
     });
     const companyNameById = new Map(companies.map((c) => [c.id, c.name]));
 
+    // Papel exibido na tela de escolha vem do banco, pelo mesmo motivo de
+    // signAppToken: o app_metadata pode ter o papel antigo.
+    const users = await prisma.user.findMany({
+      where: { id: { in: memberships.map((m) => m.userId) } },
+      select: { id: true, role: true },
+    });
+    const roleByUserId = new Map(users.map((u) => [u.id, u.role]));
+
     return {
       status: "CHOOSE_COMPANY",
       preAuthToken: jwt.sign({ authUserId: data.user.id, purpose: "choose-company" }, env.jwtSecret, {
@@ -121,7 +143,7 @@ export async function login({ email, password }: LoginInput): Promise<LoginResul
       companies: memberships.map((m) => ({
         companyId: m.companyId,
         companyName: companyNameById.get(m.companyId) ?? m.companyId,
-        role: m.role,
+        role: roleByUserId.get(m.userId) ?? m.role,
       })),
     };
   }
@@ -141,7 +163,7 @@ export async function login({ email, password }: LoginInput): Promise<LoginResul
 
   return {
     status: "OK",
-    token: signAppToken(membership),
+    token: signAppToken(membership, user.role),
     user: { id: user.id, email: user.email, role: user.role, companyId: user.companyId, memberId: user.memberId },
   };
 }
@@ -183,7 +205,7 @@ export async function chooseCompany(preAuthToken: string, companyId: string): Pr
 
   return {
     status: "OK",
-    token: signAppToken(membership),
+    token: signAppToken(membership, user.role),
     user: { id: user.id, email: user.email, role: user.role, companyId: user.companyId, memberId: user.memberId },
   };
 }
@@ -231,7 +253,7 @@ export async function switchCompany(requestingUserId: string, companyId: string)
 
   return {
     status: "OK",
-    token: signAppToken(membership),
+    token: signAppToken(membership, user.role),
     user: { id: user.id, email: user.email, role: user.role, companyId: user.companyId, memberId: user.memberId },
   };
 }

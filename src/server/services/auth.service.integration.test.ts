@@ -30,6 +30,33 @@ describe("auth.service — login via Supabase Auth", () => {
     expect(payload.companyId).toBe(tenantA.companyId);
   });
 
+  // Regressão: o papel do token vinha do app_metadata da identidade, que NÃO
+  // é reescrito quando um Admin troca o papel de alguém (updateUserRole mexe
+  // só na tabela users). Quem era promovido a Administrador continuava
+  // navegando com o papel antigo — e como o objeto `user` do login já vinha
+  // do banco (papel novo), a tela liberava seções que o backend negava.
+  it("token usa o papel do BANCO, não o do app_metadata desatualizado", async () => {
+    const { tenantA } = fixtures;
+
+    // Identidade gravada com o papel ANTIGO, como ficaria após uma promoção
+    // feita depois do aceite do convite.
+    await linkSupabaseIdentity("admin-a@teste.local", "senha-supabase-123", [
+      { userId: tenantA.adminUser.id, companyId: tenantA.companyId, role: "OPERACIONAL" },
+    ]);
+    await prismaTest.user.update({ where: { id: tenantA.adminUser.id }, data: { role: "ADMINISTRADOR" } });
+
+    const result = await login({ email: "admin-a@teste.local", password: "senha-supabase-123" });
+
+    expect(result.status).toBe("OK");
+    if (result.status !== "OK") throw new Error("esperado status OK");
+
+    const payload = jwt.verify(result.token, env.jwtSecret) as { role: string };
+    expect(payload.role).toBe("ADMINISTRADOR");
+    // Token e resposta têm de concordar — a divergência entre os dois era o
+    // que fazia a UI e o backend discordarem sobre o que liberar.
+    expect(result.user.role).toBe("ADMINISTRADOR");
+  });
+
   it("rejeita senha incorreta", async () => {
     const { tenantA } = fixtures;
     await linkSupabaseIdentity("admin-a@teste.local", "senha-correta-123", [

@@ -110,114 +110,49 @@ export async function resolveUserAssignments(companyId: string, userId: string):
 }
 
 // ============================================================
-// Regra de "exclusão de líder": uma atribuição de HIERARQUIA (CANAL/
-// DEPARTAMENTO/TIME/EMPRESA) dá acesso a tudo estrutural e hierarquicamente
-// abaixo dela — inclusive aos Líderes/Responsáveis (NodeResponsible) dos
-// nós CONECTADOS ABAIXO — mas exclui o Líder do próprio nó atribuído. Uma
-// atribuição de MEMBRO específico não tem esse conceito (não há
-// "hierarquia abaixo" de um Membro individual).
+// Atribuição de hierarquia → filtro de Membro.
 //
-// Isolado propositalmente deste jeito (em vez de alterar
-// buildMemberScopeFilter, usado por Sazonalidade/Acompanhamento/etc.): essa
-// regra vale só para a resolução de permissão de Gestor/Usuário aqui neste
-// arquivo, não para os demais consumidores de buildMemberScopeFilter.
+// Regra confirmada com o usuário (2026-08-06): uma atribuição de HIERARQUIA
+// (CANAL/DEPARTAMENTO/TIME) alcança TODOS os Membros abaixo dela, incluindo
+// os Líderes/Responsáveis (NodeResponsible) — tanto os dos nós descendentes
+// quanto o do próprio nó atribuído. buildMemberScopeFilter já resolve isso
+// inteiro (o ramo nodeResponsibleFor de cada nível cobre os líderes), então
+// não há nada a somar nem a excluir aqui.
+//
+// Histórico: existia uma "exclusão de líder" que removia do escopo o Líder
+// do próprio nó atribuído. Ela era a causa de um Gestor com o Departamento
+// 01.01 não enxergar os líderes dos Times abaixo em Membros/Fechamento/
+// Recebíveis, e foi removida por contrariar a regra de negócio.
 // ============================================================
 
-async function resolveOwnLeaderMemberIds(companyId: string, scopeType: OrgScopeType, scopeId: string | null): Promise<string[]> {
-  if (scopeType === "MEMBRO") return [];
-
-  const where =
-    scopeType === "EMPRESA"
-      ? { companyId, nodeType: "EMPRESA" as const }
-      : scopeType === "CANAL"
-        ? { companyId, nodeType: "CANAL" as const, channelId: scopeId }
-        : scopeType === "DEPARTAMENTO"
-          ? { companyId, nodeType: "DEPARTAMENTO" as const, departmentId: scopeId }
-          : { companyId, nodeType: "TIME" as const, teamId: scopeId };
-
-  const leaders = await prisma.nodeResponsible.findMany({ where, select: { memberId: true } });
-  return leaders.map((l) => l.memberId);
-}
-
-async function resolveDescendantLeaderMemberIds(companyId: string, scopeType: OrgScopeType, scopeId: string | null): Promise<string[]> {
-  if (scopeType === "MEMBRO" || scopeType === "TIME") return [];
-
-  if (scopeType === "DEPARTAMENTO") {
-    if (!scopeId) return [];
-    const teams = await prisma.team.findMany({ where: { companyId, departmentId: scopeId }, select: { id: true } });
-    const teamIds = teams.map((t) => t.id);
-    if (teamIds.length === 0) return [];
-    const leaders = await prisma.nodeResponsible.findMany({ where: { companyId, teamId: { in: teamIds } }, select: { memberId: true } });
-    return leaders.map((l) => l.memberId);
-  }
-
-  if (scopeType === "CANAL") {
-    if (!scopeId) return [];
-    const departments = await prisma.department.findMany({ where: { companyId, channelId: scopeId }, select: { id: true } });
-    const departmentIds = departments.map((d) => d.id);
-    const teams = departmentIds.length
-      ? await prisma.team.findMany({ where: { companyId, departmentId: { in: departmentIds } }, select: { id: true } })
-      : [];
-    const teamIds = teams.map((t) => t.id);
-    if (departmentIds.length === 0 && teamIds.length === 0) return [];
-    const leaders = await prisma.nodeResponsible.findMany({
-      where: { companyId, OR: [{ departmentId: { in: departmentIds } }, { teamId: { in: teamIds } }] },
-      select: { memberId: true },
-    });
-    return leaders.map((l) => l.memberId);
-  }
-
-  // EMPRESA: todo líder de qualquer nó abaixo da empresa (tudo, exceto o
-  // próprio Líder da Empresa).
-  const leaders = await prisma.nodeResponsible.findMany({
-    where: { companyId, NOT: { nodeType: "EMPRESA" } },
-    select: { memberId: true },
-  });
-  return leaders.map((l) => l.memberId);
-}
-
-async function buildAssignmentMemberFilter(companyId: string, assignment: Assignment): Promise<Prisma.MemberWhereInput> {
-  if (assignment.scopeType === "MEMBRO") {
-    return { id: assignment.scopeId! };
-  }
-
-  const [descendantLeaders, ownLeaders] = await Promise.all([
-    resolveDescendantLeaderMemberIds(companyId, assignment.scopeType, assignment.scopeId),
-    resolveOwnLeaderMemberIds(companyId, assignment.scopeType, assignment.scopeId),
-  ]);
-
-  const structural = buildMemberScopeFilter(assignment.scopeType, assignment.scopeId);
-  const included: Prisma.MemberWhereInput =
-    descendantLeaders.length > 0 ? { OR: [structural, { id: { in: descendantLeaders } }] } : structural;
-
-  if (ownLeaders.length === 0) return included;
-  return { AND: [included, { id: { notIn: ownLeaders } }] };
-}
-
-// Monta o OR de buildAssignmentMemberFilter (líder-aware) para um conjunto
-// de atribuições já no nível mínimo desejado — EDITAR sempre serve para
-// minLevel=VISUALIZAR (poder editar implica poder ver). scopeType=EMPRESA
-// em qualquer atribuição é atalho para "ALL" (empresa inteira, sem exclusão
-// de líder aplicável no nível mais alto de todos — ver
-// resolveDescendantLeaderMemberIds para o caso não-atalho). Sem nenhuma
+// Monta o OR das atribuições já no nível mínimo desejado — EDITAR sempre
+// serve para minLevel=VISUALIZAR (poder editar implica poder ver).
+// scopeType=EMPRESA em qualquer atribuição é atalho para "ALL". Sem nenhuma
 // atribuição utilizável, devolve um filtro que não casa com nenhum Membro
 // real (sem piso implícito).
-async function assignmentsToMemberFilter(
-  companyId: string,
-  assignments: Assignment[],
-  minLevel: AccessLevel,
-): Promise<Prisma.MemberWhereInput | "ALL"> {
+function assignmentsToMemberFilter(assignments: Assignment[], minLevel: AccessLevel): Prisma.MemberWhereInput | "ALL" {
   const usable = minLevel === "VISUALIZAR" ? assignments : assignments.filter((a) => a.accessLevel === "EDITAR");
   if (usable.some((a) => a.scopeType === "EMPRESA")) return "ALL";
   if (usable.length === 0) return { id: "__sem_atribuicao__" };
 
-  const filters = await Promise.all(usable.map((a) => buildAssignmentMemberFilter(companyId, a)));
-  return { OR: filters };
+  return { OR: usable.map((a) => buildMemberScopeFilter(a.scopeType, a.scopeId)) };
 }
 
-// Escopo de um Gestor: união de todas as suas atribuições (sempre tratadas
-// como EDITAR, líder-aware) + sempre o próprio Membro (mesmo padrão de
-// antes, quando isso vinha de NodeResponsible).
+// Escopo de um Gestor: união de todas as suas atribuições + sempre o
+// próprio Membro.
+//
+// Regra confirmada com o usuário (2026-08-06): uma atribuição de hierarquia
+// dá ao Gestor acesso a TODOS os Membros abaixo dela — inclusive os
+// Líderes/Responsáveis do próprio nó atribuído. A antiga "exclusão de
+// líder" (buildAssignmentMemberFilter) removia exatamente essas pessoas do
+// escopo, que é o oposto do que a regra de negócio pede: quem recebe o
+// Departamento 01.01 precisa enxergar e gerenciar os Times abaixo E seus
+// líderes. Por isso o escopo do Gestor usa buildMemberScopeFilter direto
+// (puramente estrutural), sem exclusão.
+//
+// O que continua protegido: o Gestor não EDITA os próprios Recebíveis/
+// Fechamentos (só visualiza) — isso é tratado por assertNotSelfManaging nos
+// pontos de escrita, não removendo-o do escopo de leitura.
 async function resolveGestorMemberFilter(
   companyId: string,
   requestingUserId: string,
@@ -226,16 +161,23 @@ async function resolveGestorMemberFilter(
   const assignments = await resolveUserAssignments(companyId, requestingUserId);
   if (assignments.some((a) => a.scopeType === "EMPRESA")) return "ALL";
 
-  const scopeFilters = await Promise.all(assignments.map((a) => buildAssignmentMemberFilter(companyId, a)));
+  const scopeFilters = assignments.map((a) => buildMemberScopeFilter(a.scopeType, a.scopeId));
   return { OR: [{ id: leaderMemberId }, ...scopeFilters] };
 }
 
-// Escopo nativo (fixo, sem teto configurável): próprio Membro sempre; para
-// LIDERANCA_NO, soma as hierarquias/membros atribuídos. Para OPERACIONAL,
-// é sempre só o próprio Membro — atribuições de UserScopeAssignment NÃO
-// entram aqui (decisão de negócio: Recebíveis/Fechamento do Usuário é
-// sempre só ele mesmo, nunca as hierarquias/membros liberados para ele em
-// Metas/Resultados). Usado por Recebíveis e Fechamento.
+// Escopo nativo dos módulos FINANCEIROS (Recebíveis, Bases de Recebível e
+// Fechamento) — regra confirmada com o usuário (2026-08-06), definida pelo
+// TIPO do usuário, não por módulo:
+//
+// - ADMINISTRADOR: tudo.
+// - LIDERANCA_NO: todos os Membros abaixo das hierarquias atribuídas a ele
+//   (visualizar E editar), mais o próprio Membro — este último só para
+//   VISUALIZAR (a trava de escrita é assertNotSelfManaging, aplicada nos
+//   pontos de gravação).
+// - OPERACIONAL: SEMPRE só o próprio Membro. Uma atribuição dada a um
+//   Operador vale para Resultados/Metas/Acompanhamento, mas nunca libera
+//   Recebíveis/Bases/Fechamento de terceiros — dado financeiro de outra
+//   pessoa exige o tipo Liderança de Nó.
 export async function resolveNativeVisibleMemberFilter(
   companyId: string,
   requestingUser: RequestingUser,
@@ -270,7 +212,7 @@ export async function resolveVisibleMemberFilter(
   }
 
   const assignments = await resolveUserAssignments(companyId, requestingUser.id);
-  const assignmentFilter = await assignmentsToMemberFilter(companyId, assignments, "VISUALIZAR");
+  const assignmentFilter = assignmentsToMemberFilter(assignments, "VISUALIZAR");
   if (assignmentFilter === "ALL") return "ALL";
   if (!linkedMemberId) return assignmentFilter;
   return { OR: [assignmentFilter, { id: linkedMemberId }] };
@@ -297,7 +239,7 @@ export async function resolveEditableMemberFilter(
   }
 
   const assignments = await resolveUserAssignments(companyId, requestingUser.id);
-  return assignmentsToMemberFilter(companyId, assignments, "EDITAR");
+  return assignmentsToMemberFilter(assignments, "EDITAR");
 }
 
 // Igual a resolveEditableMemberFilter, mas com uma exceção só para
@@ -317,6 +259,30 @@ export async function resolveResultsEditableMemberFilter(
   if (!link.memberId || !link.canLaunchOwnMemberResults) return base;
 
   return { OR: [base, { id: link.memberId }] };
+}
+
+// Trava de auto-gestão financeira (regra confirmada em 2026-08-06): um
+// Gestor VÊ os próprios Recebíveis/Fechamentos, mas nunca os ALTERA — quem
+// fecha/reabre/edita o benefício de um Gestor é sempre um Administrador.
+// Vale só para escrita: o próprio Membro continua no escopo de leitura
+// (resolveGestorMemberFilter), por isso a trava mora nos pontos de gravação
+// em vez de remover a pessoa do filtro.
+//
+// ADMINISTRADOR passa sempre (pode tudo, inclusive sobre si mesmo).
+// OPERACIONAL nunca chega aqui: já é barrado antes por não ter escrita
+// nesses módulos.
+export async function assertNotSelfManaging(
+  companyId: string,
+  requestingUser: RequestingUser,
+  targetMemberIds: string[],
+  errorMessage = "Você não pode alterar os seus próprios Recebíveis/Fechamentos. Peça a um Administrador.",
+): Promise<void> {
+  if (requestingUser.role === "ADMINISTRADOR") return;
+
+  const ownMemberId = await resolveRequesterMemberId(companyId, requestingUser);
+  if (ownMemberId && targetMemberIds.includes(ownMemberId)) {
+    throw new ForbiddenError(errorMessage);
+  }
 }
 
 async function assertMembersWithinFilter(
@@ -487,12 +453,22 @@ export async function resolveReceivablesBaseAccess(
   }
 
   const editableFilter = await resolveEditableMemberFilter(companyId, requestingUser);
+
+  // O próprio Membro do Gestor nunca é "gerenciável por ele mesmo" (só
+  // visualizável) — se ele for beneficiário da própria Base, essa linha sai
+  // do conjunto editável e a Base cai para PARTIAL, deixando-o mexer no
+  // resto da equipe sem se auto-editar.
+  const ownMemberId = await resolveRequesterMemberId(companyId, requestingUser);
+  const manageable = allBeneficiaryMemberIds.filter((id) => id !== ownMemberId);
+
   if (editableFilter === "ALL") {
-    return { level: "FULL", ownedMemberIds: new Set(allBeneficiaryMemberIds) };
+    const ownedMemberIds = new Set(manageable);
+    if (manageable.length === allBeneficiaryMemberIds.length) return { level: "FULL", ownedMemberIds };
+    return { level: ownedMemberIds.size === 0 ? "NONE" : "PARTIAL", ownedMemberIds };
   }
 
   const allowedMembers = await prisma.member.findMany({
-    where: { companyId, AND: [{ id: { in: allBeneficiaryMemberIds } }, editableFilter] },
+    where: { companyId, AND: [{ id: { in: manageable } }, editableFilter] },
     select: { id: true },
   });
   const ownedMemberIds = new Set(allowedMembers.map((m) => m.id));
@@ -516,6 +492,9 @@ export async function assertReceivablesBaseWithinScope(
     throw new ForbiddenError(errorMessage);
   }
   await assertEditableMembers(companyId, requestingUser, beneficiaryMemberIds, errorMessage);
+  // Alterar a Base inteira alcançaria também a linha do próprio Gestor —
+  // que ele só pode visualizar. Ver assertNotSelfManaging.
+  await assertNotSelfManaging(companyId, requestingUser, beneficiaryMemberIds);
 }
 
 // Mesma ideia de assertVisibleScope, mas contra o escopo de ESCRITA.
@@ -655,11 +634,8 @@ export async function assertNodeWithinEditableScope(
 // usado pela aba Membros da Estrutura Organizacional para listar só quem
 // está dentro do que o Gestor lidera (protege Salário de quem está fora do
 // escopo). Mesma semântica estrutural de assertNodeWithinLedScope/
-// assertNodeAllowed (ancestralidade via UserScopeAssignment), mas
-// propositalmente SEM a regra de exclusão de líder (buildAssignmentMemberFilter
-// acima) — aquela foi desenhada só para o caminho de permissão de
-// Resultados/Metas/Recebíveis, não faria sentido aqui um Gestor não
-// conseguir nem ver/gerenciar o cadastro do próprio líder na Estrutura.
+// assertNodeAllowed (ancestralidade via UserScopeAssignment) — inclui os
+// Líderes dos nós abaixo, igual aos demais resolvers.
 export async function resolveLedMemberFilter(
   companyId: string,
   requestingUser: RequestingUser,
@@ -682,10 +658,7 @@ export async function resolveLedMemberFilter(
 // escopo do usuário — usado para podar seletores de hierarquia no
 // front-end (TeamSelect, LeadershipEditor, EntityPicker/EntityMultiPicker
 // em modo escopado, HierarchyFilter), ao contrário dos resolvers acima que
-// devolvem um filtro de MEMBRO. A exclusão de líder (buildAssignmentMemberFilter)
-// não se aplica aqui de propósito: ela só remove MEMBROS específicos (o
-// líder exato de um nó) de um escopo que já inclui o nó inteiro — nunca
-// remove o NÓ em si do conjunto alcançável, então não afeta esta resolução.
+// devolvem um filtro de MEMBRO.
 // ============================================================
 
 export interface ScopeNodeIds {

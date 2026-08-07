@@ -28,6 +28,10 @@ export interface MemberFormValues {
   status: "ATIVO" | "INATIVO";
   customFixedSalary: number | null;
   leaderships: LeadershipTarget[];
+  // Vínculo com a empresa (AAAA-MM-DD ou null): define de quando até quando
+  // o Membro tem Recebíveis e Fechamentos.
+  entryDate: string | null;
+  exitDate: string | null;
 }
 
 interface MemberFormProps {
@@ -69,6 +73,9 @@ export function MemberForm({
     initialValues?.customFixedSalary != null ? String(initialValues.customFixedSalary) : "",
   );
   const [leaderships, setLeaderships] = useState<LeadershipTarget[]>(initialValues?.leaderships ?? []);
+  const [entryDate, setEntryDate] = useState(initialValues?.entryDate ?? "");
+  const [exitDate, setExitDate] = useState(initialValues?.exitDate ?? "");
+  const [dateError, setDateError] = useState<string | null>(null);
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -76,6 +83,14 @@ export function MemberForm({
     if (!fullName.trim() || !cargoId) {
       return;
     }
+
+    // Mesma validação do backend (resolveEmploymentDates) — aqui só para
+    // dar o retorno imediato, sem depender do 409 da API.
+    if (entryDate && exitDate && exitDate < entryDate) {
+      setDateError("A data de Saída não pode ser anterior à data de Entrada.");
+      return;
+    }
+    setDateError(null);
 
     onSubmit({
       fullName: fullName.trim(),
@@ -85,6 +100,8 @@ export function MemberForm({
       status,
       customFixedSalary: useCustomSalary && customFixedSalary !== "" ? Number(customFixedSalary) : null,
       leaderships: memberType === "GESTOR" ? leaderships : [],
+      entryDate: entryDate || null,
+      exitDate: exitDate || null,
     });
   }
 
@@ -180,6 +197,32 @@ export function MemberForm({
           </div>
         )}
       </div>
+
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-muted-foreground">Entrada na empresa</label>
+          <input
+            type="date"
+            value={entryDate}
+            onChange={(event) => setEntryDate(event.target.value)}
+            className="rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-muted-foreground">Saída da empresa</label>
+          <input
+            type="date"
+            value={exitDate}
+            onChange={(event) => setExitDate(event.target.value)}
+            className="rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground"
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          O Membro só tem Recebíveis e Fechamentos dentro deste período. Em branco: sem limite.
+        </p>
+      </div>
+
+      {dateError && <p className="text-xs text-destructive">{dateError}</p>}
 
       {memberType === "GESTOR" && (
         <div className="space-y-1">
