@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import {
   overlapsEmployment,
   resolveMonthlyFixedSalary,
+  resolveMonthlyManualAdjustment,
   resolveWindowStatus,
   windowSnapshotKey,
   type ClosingSnapshotContext,
@@ -23,6 +24,15 @@ function utc(iso: string): Date {
 
 function emptyContext(): ClosingSnapshotContext {
   return { closingByMemberMonth: new Map(), snapshotByWindowKey: new Map() };
+}
+
+function closedMonth(memberId: string, monthKey: string, fixed: number, adjustment = 0): ClosingSnapshotContext {
+  return {
+    closingByMemberMonth: new Map([
+      [`${memberId}|${monthKey}`, { fixedSalarySnapshot: new Prisma.Decimal(fixed), manualAdjustmentValue: new Prisma.Decimal(adjustment) }],
+    ]),
+    snapshotByWindowKey: new Map(),
+  };
 }
 
 function member(overrides: Partial<MemberLite> = {}): MemberLite {
@@ -93,20 +103,13 @@ describe("resolveMonthlyFixedSalary — Fixo congelado no Fechamento vs. ao vivo
 
   it("mês COM MemberClosing salvo: usa o valor CONGELADO, ignora o Cargo atual — cenário do usuário (fechou Jan=3000, Cargo virou 4000 em Março)", () => {
     const m = member({ cargo: { id: "cargo-1", name: "Vendedor", defaultFixedSalary: new Prisma.Decimal(4000) } });
-    const context: ClosingSnapshotContext = {
-      closingByMemberMonth: new Map([[`${m.id}|2026-01`, { fixedSalarySnapshot: new Prisma.Decimal(3000) }]]),
-      snapshotByWindowKey: new Map(),
-    };
-    const januaryValue = resolveMonthlyFixedSalary(m, "2026-01", context);
+    const januaryValue = resolveMonthlyFixedSalary(m, "2026-01", closedMonth(m.id, "2026-01", 3000));
     expect(januaryValue.toString()).toBe("3000");
   });
 
   it("range com mês fechado e mês aberto: cada mês usa sua própria fonte, sem contaminar o outro", () => {
     const m = member({ cargo: { id: "cargo-1", name: "Vendedor", defaultFixedSalary: new Prisma.Decimal(4000) } });
-    const context: ClosingSnapshotContext = {
-      closingByMemberMonth: new Map([[`${m.id}|2026-01`, { fixedSalarySnapshot: new Prisma.Decimal(3000) }]]),
-      snapshotByWindowKey: new Map(),
-    };
+    const context = closedMonth(m.id, "2026-01", 3000);
     expect(resolveMonthlyFixedSalary(m, "2026-01", context).toString()).toBe("3000"); // congelado
     expect(resolveMonthlyFixedSalary(m, "2026-03", context).toString()).toBe("4000"); // ao vivo, Cargo já aumentado
   });
@@ -115,6 +118,46 @@ describe("resolveMonthlyFixedSalary — Fixo congelado no Fechamento vs. ao vivo
     const m = member({ cargo: null });
     const value = resolveMonthlyFixedSalary(m, "2026-01", emptyContext());
     expect(value.toString()).toBe("0");
+  });
+});
+
+// Regra confirmada com o usuário (2026-08-07): sempre que existe Fechamento
+// validado, ele SOBREPÕE o cálculo de Recebíveis daquele período — alterar
+// hoje o Fixo de um Cargo/Membro ou a regra de uma Base não pode mexer no
+// passado já fechado.
+describe("resolveMonthlyManualAdjustment — Valor Adicional do Fechamento", () => {
+  it("mês fechado com Valor Adicional: Recebíveis enxerga o mesmo valor lançado no Fechamento", () => {
+    const context = closedMonth("member-1", "2026-06", 2000, 100);
+    expect(resolveMonthlyManualAdjustment("member-1", "2026-06", context).toString()).toBe("100");
+  });
+
+  it("mês fechado sem Valor Adicional: zero", () => {
+    const context = closedMonth("member-1", "2026-06", 2000);
+    expect(resolveMonthlyManualAdjustment("member-1", "2026-06", context).toString()).toBe("0");
+  });
+
+  it("mês NÃO fechado: zero (nada a sobrepor, o cálculo ao vivo manda)", () => {
+    expect(resolveMonthlyManualAdjustment("member-1", "2026-06", emptyContext()).toString()).toBe("0");
+  });
+
+  it("Valor Adicional negativo (desconto) é preservado com o sinal", () => {
+    const context = closedMonth("member-1", "2026-06", 2000, -250);
+    expect(resolveMonthlyManualAdjustment("member-1", "2026-06", context).toString()).toBe("-250");
+  });
+
+  it("não vaza entre Membros: o Adicional de um não conta para o outro", () => {
+    const context = closedMonth("member-1", "2026-06", 2000, 100);
+    expect(resolveMonthlyManualAdjustment("member-2", "2026-06", context).toString()).toBe("0");
+  });
+
+  it("cenário do usuário: Fechamento de Junho (Fixo 2.000 + Adicional) vence o Cargo atual de 3.000", () => {
+    const m = member({ cargo: { id: "cargo-1", name: "Vendedor", defaultFixedSalary: new Prisma.Decimal(3000) } });
+    const context = closedMonth(m.id, "2026-06", 2000, 100);
+
+    expect(resolveMonthlyFixedSalary(m, "2026-06", context).toString()).toBe("2000");
+    expect(resolveMonthlyManualAdjustment(m.id, "2026-06", context).toString()).toBe("100");
+    // Julho segue em aberto: volta a valer o Cargo vigente.
+    expect(resolveMonthlyFixedSalary(m, "2026-07", context).toString()).toBe("3000");
   });
 });
 

@@ -92,7 +92,11 @@ export function resolveWindowStatus(window: PeriodWindow, referenceDate: Date, h
 
 export interface ClosingSnapshotContext {
   // chave: `${memberId}|${monthKeyOf(referenceMonth)}` — Fixo é por mês civil.
-  closingByMemberMonth: Map<string, { fixedSalarySnapshot: Prisma.Decimal }>;
+  // manualAdjustmentValue: o "Valor Adicional" lançado à mão pelo gestor no
+  // Fechamento. Vive só no MemberClosing (não há FinancialPeriodSnapshot
+  // para ele, já que não vem de Campanha nenhuma), então precisa ser
+  // carregado aqui para que Recebíveis mostre o mesmo total do Fechamento.
+  closingByMemberMonth: Map<string, { fixedSalarySnapshot: Prisma.Decimal; manualAdjustmentValue: Prisma.Decimal }>;
   // chave: `${memberId}|${receivablesBaseId}|${isoKey(periodStart)}` —
   // Benefício é por janela exata (uma Base Semanal tem várias janelas/mês).
   snapshotByWindowKey: Map<
@@ -142,6 +146,7 @@ export async function loadClosingSnapshotContext(
   for (const closing of closings) {
     closingByMemberMonth.set(`${closing.memberId}|${monthKeyOf(closing.referenceMonth)}`, {
       fixedSalarySnapshot: closing.fixedSalarySnapshot,
+      manualAdjustmentValue: closing.manualAdjustmentValue ?? new Prisma.Decimal(0),
     });
     for (const snapshot of closing.snapshots) {
       snapshotByWindowKey.set(windowSnapshotKey(snapshot.memberId, snapshot.receivablesBaseId, snapshot.periodStart), {
@@ -233,6 +238,18 @@ export function resolveMonthlyFixedSalary(member: MemberLite, monthKey: string, 
   if (frozen) return frozen.fixedSalarySnapshot;
   if (!member.cargo) return new Prisma.Decimal(0);
   return resolveFixedSalary({ customFixedSalary: member.customFixedSalary }, { defaultFixedSalary: member.cargo.defaultFixedSalary });
+}
+
+// "Valor Adicional" lançado à mão no Fechamento do mês (zero quando o mês
+// não foi fechado). Faz parte do total que o Fechamento aprovou, então
+// Recebíveis tem de somá-lo — senão as duas telas mostram números
+// diferentes para um mês já fechado.
+export function resolveMonthlyManualAdjustment(
+  memberId: string,
+  monthKey: string,
+  snapshotContext: ClosingSnapshotContext,
+): Prisma.Decimal {
+  return snapshotContext.closingByMemberMonth.get(`${memberId}|${monthKey}`)?.manualAdjustmentValue ?? new Prisma.Decimal(0);
 }
 
 // ============================================================
@@ -520,6 +537,20 @@ export async function getReceivablesOverview(
       const monthlySalary = resolveMonthlyFixedSalary(member, monthKey, snapshotContext);
       fixoTotal = fixoTotal.plus(monthlySalary);
       fixoPorMes.set(monthKey, (fixoPorMes.get(monthKey) ?? new Prisma.Decimal(0)).plus(monthlySalary));
+    }
+  }
+
+  // "Valor Adicional" dos meses já fechados: não vem de Campanha nenhuma
+  // (não tem janela nem FinancialPeriodSnapshot), então não aparece em
+  // nenhuma `row` acima — mas compõe o total que o Fechamento aprovou.
+  // Entra no bucket FECHADO, junto dos benefícios congelados, para que o
+  // valor visto aqui bata com o do Fechamento.
+  for (const { member } of memberRows) {
+    for (const monthKey of monthKeys) {
+      const adjustment = resolveMonthlyManualAdjustment(member.id, monthKey, snapshotContext);
+      if (!adjustment.isZero()) {
+        fechadoTotal = fechadoTotal.plus(adjustment);
+      }
     }
   }
 
