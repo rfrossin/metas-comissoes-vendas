@@ -580,6 +580,19 @@ export async function updateMember(companyId: string, requestingUser: Requesting
   const leadershipRows = await resolveLeadershipRows(companyId, requestingUser, leaderships);
   const { entryDate, exitDate } = resolveEmploymentDates(data);
 
+  const isBeingDeactivated = data.status === "INATIVO" && member.status === "ATIVO";
+  const isBeingReactivated = data.status === "ATIVO" && member.status === "INATIVO";
+
+  // Desativar o Membro encerra o vínculo: se o gestor não informou uma data
+  // de Saída, ela é preenchida com a data da desativação — sem isso o
+  // Membro continuaria acumulando Recebíveis/Fechamentos depois de sair,
+  // que é justamente o que a janela de vínculo existe para impedir. Uma
+  // data digitada à mão sempre vence (o desligamento real pode ser anterior
+  // ao registro no sistema).
+  const today = new Date();
+  const deactivationDate = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  const resolvedExitDate = isBeingDeactivated ? (exitDate ?? deactivationDate) : exitDate;
+
   return withTenant(async (tx) => {
     const updated = await tx.member.update({
       where: { id },
@@ -590,8 +603,12 @@ export async function updateMember(companyId: string, requestingUser: Requesting
         customFixedSalary: data.customFixedSalary,
         status: data.status,
         entryDate,
-        exitDate,
-        ...(data.status === "INATIVO" && member.status === "ATIVO" ? { inactivatedAt: new Date() } : {}),
+        exitDate: resolvedExitDate,
+        ...(isBeingDeactivated ? { inactivatedAt: new Date() } : {}),
+        // Reativar limpa o carimbo técnico — o cadastro voltou a valer. A
+        // data de Saída em si continua sob controle do gestor (pode ser um
+        // retorno com novo período), então não é apagada aqui.
+        ...(isBeingReactivated ? { inactivatedAt: null } : {}),
       },
       include: { cargo: { select: { id: true, name: true } } },
     });
